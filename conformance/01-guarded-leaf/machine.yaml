@@ -1,9 +1,12 @@
 id: gate
-initial: locked
-data:
-  granted: { type: bool, external: true }   # unset until the host supplies it
-states:
-  locked:
-    on:
-      enter: { target: open, guard: "granted == true" }
-  open: {}
+events:
+  enter: { payload: { code: { type: string } } }
+top:
+  esvs:
+    secret: { type: string, init: "open-sesame" }
+  initial: { transition_to: locked }
+  states:
+    locked:
+      on_events:
+        enter: { transition_to: open, guard: "event.payload.code == secret" }
+    open: {}
