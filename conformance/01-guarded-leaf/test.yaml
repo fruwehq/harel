@@ -1,17 +1,16 @@
-title: guarded leaf transition — opens only once access is granted
+title: guarded leaf transition — opens only with the right code
 steps:
-  # granted is unset (null) -> guard fails -> no transition.
-  - send: { signal: enter }
+  # wrong code -> guard fails -> no transition.
+  - send: { event: enter, payload: { code: "nope" } }
     expect:
       config: [locked]
 
-  # Host supplies the external variable; the same signal now transitions.
-  - data: { granted: true }
-    send: { signal: enter }
+  # correct code -> guard passes -> transition.
+  - send: { event: enter, payload: { code: "open-sesame" } }
     expect:
       config: [open]
 
   # open has no handler for enter -> event discarded, state unchanged.
-  - send: { signal: enter }
+  - send: { event: enter, payload: { code: "open-sesame" } }
     expect:
       config: [open]

@@ -15,10 +15,11 @@ posts the event (or advances the virtual clock) and runs **all** instances to
 quiescence before checking `expect`. See `01-guarded-leaf/` for the minimal shape.
 
 The implementing agent should expand this suite to cover everything listed in
-SPEC §9: hierarchy, orthogonal regions + region order, shallow/deep history,
-CEL guards, structured actions, typed-payload accept/reject, defer (deferred-set +
-edge-triggered reinsertion, no busy-loop), timers via the virtual clock,
-spawn/send/emit/broadcast/stop + FIFO, action faults (`on_error` present/absent +
-dead-letter), termination + child cleanup, contracts, and snapshot round-trip +
-migration. The suite is the deliverable that makes multi-language implementations
-trustworthy.
+SPEC §9: hierarchy, orthogonal regions + region order + `done`, shallow/deep history,
+`initial` transitions with actions, CEL guards, structured actions, typed-payload
+accept/reject, `esvs` scope/shadow/re-init, `external` esvs + `env`/`refresh`, defer
+(deferred-set + edge-triggered reinsertion, no busy-loop), timers via the virtual
+clock, publish (directed/subscription/scope) + spawn/stop + FIFO, faults (`error`
+handled/absent + dead-letter), termination + child cleanup, contracts, and snapshot
+round-trip + migration. The suite is the deliverable that makes multi-language
+implementations trustworthy.

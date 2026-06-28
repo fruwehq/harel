@@ -1,6 +1,6 @@
 # harel — specification
 
-Status: **draft v1**. Normative unless a section says "informative."
+Status: **draft v2**. Normative unless a section says "informative."
 Keywords MUST / SHOULD / MAY per RFC 2119.
 
 ## 0. References
@@ -8,428 +8,352 @@ Keywords MUST / SHOULD / MAY per RFC 2119.
 - Miro Samek, *Practical Statecharts in C/C++ — Quantum Programming for Embedded
   Systems* (PSiCC). The canonical hierarchical-state-machine (HSM) dispatch and
   transition algorithm. **Implementers SHOULD follow PSiCC's RTC/LCA algorithm.**
+  The outermost state is named **`top`** after PSiCC.
 - David Harel, *Statecharts: A Visual Formalism for Complex Systems* (orthogonal
   regions, hierarchy, history).
 - UML 2.x State Machines (terminology; behavioral semantics where not overridden).
 - CEL — Google Common Expression Language (<https://cel.dev/>), the guard /
   expression language (§6).
-- `cns_statemachine` (prior art; XML + Groovy guards/actions). harel uses YAML +
-  CEL + structured actions.
+- `cns_statemachine` (prior art: a Ruby HSM with a YAML machine format). harel keeps
+  its vocabulary — `top`, `esvs`, `on_events`, `transition_to`, `defer`, `publish`,
+  `event_types` — and replaces raw Ruby guards/actions with CEL + structured actions.
 
 ## 1. Goals
 
-1. **One definition, many runtimes.** A machine is defined once in YAML; an engine
-   in any language runs it. Cross-language agreement is guaranteed by the
-   conformance suite (§9), which is the ultimate arbiter of correct behavior.
+1. **One definition, many runtimes.** A machine is defined once in YAML; an engine in
+   any language runs it. Cross-language agreement is guaranteed by the conformance
+   suite (§9), the ultimate arbiter of correct behavior.
 2. **Full statechart semantics:** hierarchy, orthogonal regions, history, defer,
    timers, run-to-completion.
-3. **Active objects:** each machine *instance* owns an event queue; instances are
-   spawned dynamically and communicate only by posting events (no shared mutable
-   state across instances).
-4. **Portable, sandboxed expressions:** guards in CEL; actions are a small
-   structured set whose argument values are CEL. Host scripting languages are
-   pluggable but not required for portability.
-5. **Strict typing:** extended-state variables and event payloads are typed and validated
-   (§4.2, §4.3).
-6. **Robust over time:** defined fault handling (§5.9), versioned definitions and
-   safe-point migration (§10), and event-schema evolution guidance (§10.3) so
-   long-lived instances survive engine/definition upgrades.
-7. **Contracts:** declare and statically check that a machine provides an interface
-   (§7).
-8. **Engine is application-agnostic.** No domain concepts. Hosts supply storage,
-   clock, and (optional) custom-action adapters through interfaces (§8).
+3. **Active objects:** each instance owns an event queue; instances are spawned
+   dynamically and communicate only by publishing events (no shared mutable state).
+4. **Portable, sandboxed expressions:** guards in CEL; actions are a small structured
+   set whose computed values are CEL. Host scripting languages are pluggable.
+5. **Extended state done right:** typed variables (`esvs`) declared **inside states**,
+   hierarchically scoped — not a global blob. External values are esvs too (§4.4).
+6. **Robust over time:** defined faults (§5.10), external-change handling (§5.4),
+   versioned definitions + safe-point migration (§10).
+7. **Pluggable infrastructure:** the event bus, queue, clock, and store are adapters
+   with a simple in-memory default for tests (§8); machine semantics don't depend on
+   the transport.
+8. **Contracts:** declare and statically check that a machine provides an interface (§7).
+9. **Application-agnostic engine.** No domain concepts.
 
 ## 2. Conformance
 
-An implementation is **conformant** iff it passes every case in `conformance/`
-(§9). The prose here explains intent; where prose and the suite disagree, the
-suite wins and a bug MUST be filed against this document. Implementations MAY add
-guard/action languages and storage/clock adapters; they MUST NOT change the core
-dispatch semantics. Machine YAML MUST validate against `schema/machine.schema.json`
-before execution.
+An implementation is **conformant** iff it passes every case in `conformance/` (§9).
+Where prose and the suite disagree, the suite wins and a bug MUST be filed against
+this document. Implementations MAY add guard/action languages and adapters; they MUST
+NOT change core dispatch semantics. Machine YAML MUST validate against
+`schema/machine.schema.json` before execution.
+
+**Parsing.** harel YAML MUST be parsed under the **YAML 1.2 core schema** (only
+`true`/`false` are booleans). Identifiers (state/event/variable names) MUST match
+`^[A-Za-z_][A-Za-z0-9_]*$`. The names `top`, `id`, `parent`, `event`, and the events
+`initial`, `entry`, `exit`, `env`, `error`, `done` are **reserved** (§3, §5).
 
 ## 3. Concepts
 
-- **Machine definition** — a YAML document describing one *kind* of statechart,
-  carrying its own `version` (§10).
-- **Machine instance** (a.k.a. **active object**) — a running statechart: a
-  definition + **extended state** (typed variables declared on states, §4.2/§5.1) +
-  an **event queue** + a **deferred set** (§5.7) + a **state configuration** (the set
-  of currently active states; >1 when orthogonal regions are active). Has a stable
-  **instance id** and records the **definition version** it runs under. Extended
-  state is per-instance; instances never share variables.
-- **State** — `simple` (leaf), `composite` (one region of substates), or
-  `orthogonal` (≥2 concurrent regions). Composite/orthogonal states have an
-  **initial** transition per region.
-- **Region** — an independent area of a composite/orthogonal state with its own
-  active substate. Orthogonal regions are processed within a single RTC step of the
-  *same* instance (synchronous), unlike spawned instances (asynchronous).
-- **Pseudostates** — `initial`, `final`, `history` (shallow `H`, deep `H*`),
-  `choice` (dynamic, guards evaluated at run), `junction` (static).
-- **Signal** — a declared event name with a typed **payload schema** (§4.3).
-- **Event** — an occurrence of a signal carrying a concrete payload.
-- **Transition** — `source --signal [guard] / action--> target`. Kinds:
-  **external** (default; exits source state), **internal** (no exit/entry; action
-  only), **local** (does not exit the containing composite). May be **guarded**.
-- **Guard** — a boolean CEL expression over extended state + event payload.
-- **Action** — a structured statement (assign / post / send / emit / broadcast /
-  spawn / stop) whose argument values are CEL expressions. Run on transitions and
-  on state entry/exit.
-- **Contract** — a named interface: required signals, states, spawns (§7).
+- **Machine definition** — a YAML document describing one *kind* of statechart, with a
+  single outermost state, `top`.
+- **Machine instance** (a.k.a. **active object**) — a running statechart: a definition
+  + **extended state** (`esvs`, §4.4) + an **event queue** + a **deferred set** (§5.8)
+  + a **state configuration** (active states; >1 with orthogonal regions). Has a
+  stable **instance id** (`id`) and a **parent** id, and records the **definition
+  version** it runs under. State is per-instance; instances never share variables.
+- **State** — `simple` (leaf), `composite` (one region of substates), `orthogonal`
+  (≥2 regions), or `final`. `top` is the outermost composite/orthogonal state.
+- **Region** — an independent area of a composite/orthogonal state with its own active
+  substate. Orthogonal regions run within one RTC step of the *same* instance
+  (synchronous), unlike spawned instances (asynchronous).
+- **Pseudostates** — the **initial transition** of a composite/region, `final`,
+  `history` (shallow/deep), `choice` (dynamic), `junction` (static).
+- **Event** — an occurrence of a declared **event type** carrying a typed payload.
+  Some event types are **reserved lifecycle events**: `initial`, `entry`, `exit`
+  (state lifecycle, §5.3/§5.5), `env` (external change, §5.4), `error` (fault, §5.10),
+  `done` (orthogonal completion, §5.6).
+- **Transition** — `source --event [guard] / action--> transition_to`. Kinds:
+  **external** (default), **internal** (no exit/entry; action only), **local**. May be
+  guarded.
+- **esv** — an extended-state variable (typed; declared in a state; §4.4).
+- **Contract** — a named interface (required events, states, spawns; §7).
 
 ## 4. Machine definition (YAML)
 
-A definition is one YAML document. The `schema/machine.schema.json` JSON Schema is
-normative for structure; this section gives meaning. See `examples/full.yaml` (every
-feature) and `examples/minimal.yaml` (smallest valid machine).
-
-**Parsing:** harel YAML MUST be parsed under the **YAML 1.2 core schema**, where
-only `true`/`false` are booleans. This matters because the transition key is `on:`;
-a YAML 1.1 parser (e.g. stock PyYAML) would coerce `on`/`off`/`yes`/`no` to
-booleans. Implementations on a 1.1 parser MUST disable that coercion. Signal,
-state, and variable names MUST match `^[A-Za-z_][A-Za-z0-9_]*$`.
+The `schema/machine.schema.json` JSON Schema is normative for structure; this section
+gives meaning. See `examples/full.yaml` (every feature) and `examples/minimal.yaml`.
 
 ```yaml
-format: 1                      # grammar version (optional; defaults to 1)
-id: session                    # definition id (required, stable)
-version: 1                     # this definition's version, for migration (optional; default 1)
+format: 1                  # grammar version (optional; defaults to 1)
+id: download               # definition id (required, stable)
+version: 1                 # this definition's version, for migration (optional; default 1)
+contracts: [download]      # interfaces this machine claims to satisfy (§7)
+subscribe: []              # external event types this machine listens for (§5.7)
 
-data:                          # machine-scoped extended-state variables (§4.2)
-  retries: { type: int, init: 0 }
+events:                    # event-type declarations (the alphabet) (§4.3)
+  connected: {}
+  chunk:  { payload: { bytes: { type: int, required: true } }, scope: internal }
+  download_done: { payload: { id: { type: string } }, scope: local }
 
-signals:                       # typed signal/payload declarations (§4.3)
-  start: {}
-  ping: {}
-  drop: {}
-
-initial: idle
-
-on_error: { target: broken }   # optional machine-level fault handler (§5.9)
-
-states:
-  idle:
-    on:
-      start: { target: live }
-
-  live:                        # composite state with its own scoped variable
-    type: composite
-    initial: waiting
-    data:
-      pending: { type: int, init: 0 }   # state-scoped: initialized on entry to `live`
-    on:
-      drop: { target: idle }
-    states:
-      waiting:
-        on:
-          ping:
-            internal: true
-            action:
-              - assign: { pending: "pending + 1" }   # writes the nearest `pending`
-
-  broken: {}
+top:                       # THE outermost state (PSiCC "top"); holds machine-wide
+  esvs:                    #   esvs, listeners, and the initial transition (§4.4)
+    password: { type: string, external: true }   # seeded by host; read-only; retained
+    bytes:    { type: int, init: 0 }
+  on_events:
+    env:   { guard: "event.payload.changed.password != password", transition_to: reprovision }
+    error: { transition_to: failed }             # fault handling is just a listener
+  initial: { transition_to: idle }               # an initial *transition* (§5.3)
+  states:
+    idle:
+      on_events:
+        connected: { transition_to: idle }
+    reprovision:
+      entry:
+        - refresh: { only: [password] }          # adopt the changed external value
+    failed: {}
 ```
 
 ### 4.1 Top-level fields
-- `format` (int, optional, default `1`) — the harel grammar version the document
-  targets. The engine reads it to select parsing rules; usually omitted.
+- `format` (int, optional, default `1`) — grammar version the engine parses against.
 - `id` (string, required, stable) — definition id.
 - `version` (int ≥1, optional, default `1`) — *this definition's* version, bumped by
-  the author; the input to migration (§10). This is the only "version" most machines
-  carry; `format` versions the language, `version` versions the machine.
-- `contracts` (list of strings, optional) — declared interfaces (§7).
-- `data` (map, optional) — machine-scoped extended-state variables, i.e. those
-  declared on the implicit root state (§4.2).
-- `signals` (map, optional but RECOMMENDED) — typed signals (§4.3). Strict typing:
-  if `signals` is present, only declared signals MAY be posted to the machine and
-  payloads MUST validate; an undeclared or malformed event is rejected at post time
-  (host error, not a fault — it never enters the queue).
-- `languages` (map, optional) — `{guard, action}` language ids; defaults
-  `{guard: cel, action: harel}`. Overriding `guard` selects a host-pluggable
-  language for guards; `action: harel` is the structured action set (§6) and is the
-  portable default.
-- `initial` (string, required) — id of the top-level initial substate.
-- `on_error` (Transition, optional) — taken when an action faults (§5.9).
+  the author; input to migration (§10). `format` versions the language; `version`
+  versions the machine.
+- `contracts` (list, optional) — declared interfaces (§7).
+- `subscribe` (list of event-type names, optional) — external events this machine
+  receives by subscription (§5.7).
+- `events` (map, optional but RECOMMENDED) — typed event types (§4.3). If present, only
+  declared events MAY be delivered and payloads MUST validate.
+- `languages` (map, optional) — `{guard, action}` ids; defaults `{guard: cel, action:
+  harel}`.
 - `migrations` (list, optional) — forward migrations from older versions (§10).
-- `states` (map, required) — `name -> StateNode`.
+- `top` (StateNode, required) — the outermost state (§4.5). All behavior lives under it.
 
-### 4.2 Extended-state variables (`data`)
-Extended-state variables (Harel/Samek's *extended state* — the machine's data beyond
-its discrete state) are **declared on states**, not in one global blob. A `data:`
-block may appear on the machine top level (the implicit root) and on any state:
+### 4.2 No global blob
+There is **no** top-level `data`/`params`/`context`. Machine-wide *mutable* state is
+declared as `esvs` on `top` (§4.4). Machine-wide *external/immutable-ish* inputs are
+`external` esvs (also on `top`). Object identity is the intrinsic `id`/`parent`.
 
-`data: { name: { type, init?, external? } }`.
+### 4.3 Events (typed payloads, scope)
+`events: { name: { payload?: { field: {type, required?, default?} }, scope? } }`.
+- `payload` fields are typed; `required: true` MUST be present; extras are rejected.
+  Validation happens at delivery; an invalid payload is a host error (not enqueued).
+- `scope ∈ {internal, local, global}` (default `internal`) governs **undirected**
+  delivery (§5.7): `internal` = self only; `local` = the publishing instance's tree;
+  `global` = the whole bus. **Directed** publishes (`to:`) ignore scope. Per "make the
+  default explicit," authors SHOULD write `scope` when an event crosses instances.
+- Reserved lifecycle events (`initial`/`entry`/`exit`/`env`/`error`/`done`) are not
+  declared here.
+
+### 4.4 Extended-state variables (`esvs`)
+`esvs` are Harel/Samek *extended state* — declared **inside states**, never globally.
+A state (including `top`) MAY carry an `esvs` block:
+
+`esvs: { name: { type, init?, external? } }`.
 - `type ∈ {string, int, float, bool, map, list}`.
-- `init` — the initial **literal** value, assigned **when the declaring state is
-  entered** (§5.1). Omit ⇒ the variable starts **unset** (`null`). A given `init`
-  MUST match `type`. (Dynamic initialization — from an event payload or an outer
-  variable — is done with an `entry` action.)
-- `external: true` — top-level only. The value is supplied from **outside** the
-  machine: by the **host** (resolved settings/secrets) or, for a spawned instance,
-  **seeded from the spawn payload** by matching name (§5.6). External variables are
-  read-only to actions; the host MAY refresh them before dispatch.
+- `init` — initial **literal** value, assigned **on entry** to the declaring state
+  (§5.1). Omit ⇒ starts unset (`null`). A non-null `init` MUST match `type`. (Dynamic
+  initialization is done with an `entry` action.)
+- `external: true` — the value is **seeded from the host** at entry (resolved settings/
+  secrets/environment), is **read-only** to `assign`, and **retains** its value until
+  re-seeded (state re-entry) or adopted via `refresh` (§5.4). External esvs are how a
+  machine *owns* a copy of an outside value (e.g. a provisioned password).
 
 **Scope.** A variable is visible to its declaring state, that state's substates, and
-their guards/actions/timers. Resolution walks **up** the active state hierarchy; an
-inner declaration **shadows** an outer one of the same name. Top-level `data` is in
-scope everywhere (it lives for the instance's lifetime). See §5.1 for lifetime and
-write semantics.
+their guards/actions/timers. Resolution walks **up** the active hierarchy; an inner
+declaration **shadows** an outer one. `top`'s esvs are in scope everywhere. Lifetime,
+re-init, and write rules: §5.1.
 
-### 4.3 Signals (typed payloads)
-`signals: { name: { payload?: { field: {type, required?, default?} } } }`.
-- A signal with no `payload` carries an empty payload.
-- `required: true` fields MUST be present; others may be omitted (and take
-  `default` if given). Extra fields not in the schema are rejected.
-- Payload validation happens at **post time**; an invalid payload is a host-side
-  error and the event is not enqueued (see §10.3 for evolving payloads safely).
-
-### 4.4 StateNode
-- `type`: `simple` (default) | `composite` | `orthogonal`.
-- `data`: extended-state variables scoped to this state (§4.2), initialized on entry.
-- `entry`, `exit`: ordered list of actions (§6).
-- `initial`: required for `composite`; for `orthogonal` each region declares its
-  own.
+### 4.5 StateNode
+- `type`: `simple` (default) | `composite` | `orthogonal` | `final`.
+- `esvs`: variables scoped to this state (§4.4).
+- `entry`, `exit`: ordered action lists run on entry/exit (§6).
+- `initial`: the **initial transition** (`{ transition_to, guard?, action? }`),
+  required for `composite`; each `orthogonal` region declares its own. Taken on entry
+  to reach a substate; MAY run an action (§5.3).
 - `states`: nested states (for `composite`).
-- `regions`: list of `{ initial, states }` (for `orthogonal`, ≥2, ordered §5.5).
-- `on`: map `signal -> Transition | [Transition, ...]` (a list is ordered; the
-  first whose guard passes wins).
-- `after`: list of `{ duration, target?, action?, guard? }` time-triggered
-  transitions (§5.8).
-- `defer`: list of signal names deferred while this state is active (§5.7).
+- `regions`: list of `{ initial, states }` (for `orthogonal`, ≥2, ordered §5.6).
+- `on_events`: map `event -> Transition | [Transition,...]` (a list is ordered; first
+  passing guard wins). Listeners — including `env`/`error` — live here.
+- `after`: list of `{ duration, transition_to?, action?, guard? }` timers (§5.9).
+- `defer`: event names deferred while this state is active (§5.8).
 - `history`: `none` (default) | `shallow` | `deep`.
 
-### 4.5 Transition
-- `target`: state id, dotted for nesting (`reachable.idle`); omit ⇒ internal.
-- `guard`: CEL boolean expression (optional). `lang:` MAY override the language.
-- `action`: ordered list of actions (optional).
-- `internal`: bool (no exit/entry; action only).
-- `local`: bool (do not exit/re-enter the least-common composite).
+### 4.6 Transition
+- `transition_to`: target state id, dotted for nesting; omit ⇒ internal.
+- `guard`: CEL boolean (optional). `lang:` MAY override the language.
+- `action`: ordered action list (optional).
+- `internal` / `local`: bool (§5.5).
 
 ## 5. Execution semantics (normative)
 
 ### 5.1 Extended state (lifetime, scope, writes)
-Extended-state variables are **hierarchically scoped** (§4.2), not a global blob.
-- **Lifetime / initialization.** A state's `data` variables are created and assigned
-  their `init` value (or `null` if unset) **when the state is entered**, as the first
-  step of entry — *before* that state's `entry` actions run, so the actions may read
-  them. They are **destroyed when the state is exited** (after its `exit` actions
-  run). Re-entering a state **re-initializes** its variables (including re-entry via
-  history — history restores the active *configuration*, not variable values).
-  Top-level (`root`) variables are initialized once, at instance creation, and live
-  until the instance terminates.
-- **Reads.** A guard/action reads a variable by name; resolution walks up the active
-  state hierarchy from the handling state, innermost first; an inner declaration
-  shadows an outer one. Referencing a name not in scope is a load-time error.
-- **Writes.** `assign` writes to the **nearest enclosing** declaration of that name.
-  Writing a name not in scope is a load-time error. `external` variables are
-  read-only. Assignments MUST respect declared types.
-- Reads/writes are visible within the current RTC step.
+- **Initialization.** A state's `esvs` are created and assigned their `init` (or `null`)
+  **when the state is entered**, *before* its `entry` actions. `external` esvs are
+  seeded from the host at that point. They are **destroyed on exit** (after `exit`
+  actions). Re-entry **re-initializes** (history restores the *configuration*, not
+  variable values). `top`'s esvs initialize once, at instance creation.
+- **Reads.** A name resolves up the active hierarchy, innermost first (shadowing).
+  Referencing a name not in scope is a load-time error.
+- **Writes.** `assign` writes the **nearest enclosing** declaration. `external` esvs are
+  read-only to `assign` (adopt changes via `refresh`, §5.4). Type-checked.
 
 ### 5.2 Run-to-completion (RTC)
-Each instance processes **one event completely** — all resulting transitions,
-exit/entry/initial actions, and orthogonal-region dispatch — before dequeuing the
-next. An instance is never re-entered while an RTC step is in progress. Events
-posted during a step are enqueued (§5.6), never processed recursively. RTC per
-instance is single-threaded.
+Each instance processes **one event completely** — all transitions, exit/entry/initial
+actions, orthogonal dispatch — before dequeuing the next. No re-entrancy mid-step.
+Events produced during a step are enqueued (§5.7), never recursed. RTC is
+single-threaded per instance.
 
-### 5.3 Hierarchical event handling
-On dispatch of signal `s`, for each active leaf state, search for a transition on
-`s` starting at the **most deeply nested** active state and walking up the parent
-chain. The **first** state whose transition for `s` has a passing guard handles the
-event; ancestors are not consulted further for that region. If `s` is in the active
-config's `defer` set and unhandled, it is deferred (§5.7). Otherwise an unhandled
-event is silently discarded (informative: hosts MAY log).
+### 5.3 Entry, exit, and the initial transition
+On entering a state: initialize its `esvs` (§5.1) → run `entry` actions → if
+composite/orthogonal, take its `initial` transition(s) (running any initial `action`)
+to reach substates. On exiting: run `exit` actions → destroy its `esvs`. `entry`,
+`exit`, and `initial` are the **state lifecycle** (the cns `SIG_STATE_ENTRY` /
+`SIG_INITIAL_STATE` analogues); ordering MUST match PSiCC and is pinned by the suite.
 
-### 5.4 Transition execution
-For a chosen external transition `src --> tgt` with actions `a`:
-1. Compute **LCA** = least common ancestor composite of `src` and `tgt`.
-2. **Exit** active states from the current leaf up to (not including) LCA,
-   innermost-first; for each, run its `exit` actions then destroy its `data` (§5.1).
-3. Run the transition actions `a`.
-4. **Enter** states from LCA down to `tgt`, outermost-first; for each, first
-   initialize its `data` (§5.1), then run its `entry` actions.
-5. If `tgt` is composite/orthogonal, recursively take its `initial` (or `history`)
-   transitions until all regions reach leaf states.
+### 5.4 External change (`env`) and `refresh`
+External esvs (§4.4) are seeded once and then owned by the machine. When the host
+observes that an external source changed, it **posts the reserved `env` event** to the
+instance with `payload.changed = { name: newValue, ... }`. The host monitors; the
+machine reacts. A machine handles `env` in `on_events` like any event (compare its
+current esv to `event.payload.changed.<name>`, guard, transition). The **`refresh`**
+action (§6) adopts changes into the in-scope external esvs: `refresh: {}` copies all
+names present in `event.payload.changed`; `refresh: { only: [a,b] }` copies a subset.
+`refresh` is valid only while handling an `env` event.
 
-`internal`: run only the actions; no exit/entry; config unchanged.
-`local`: like external but LCA is the containing composite itself (no exit/re-entry
-of that composite). Entry/exit ordering MUST match PSiCC; the suite pins it.
+### 5.5 Transition execution
+For an external transition `src --> tgt` with actions `a`:
+1. **LCA** = least common ancestor composite of `src` and `tgt`.
+2. **Exit** from the current leaf up to (not including) LCA, innermost-first; per state
+   run `exit` then destroy `esvs`.
+3. Run transition actions `a`.
+4. **Enter** from LCA down to `tgt`, outermost-first; per state initialize `esvs` then
+   run `entry`; take `initial` transitions as needed (§5.3).
+`internal`: actions only; no exit/entry. `local`: LCA is the containing composite
+itself (no exit/re-entry of it). Ordering pinned by the suite.
 
-### 5.5 Orthogonal regions
-An `orthogonal` state has ≥2 regions, each with its own active substate. A
-dispatched signal is offered to **every** region (each runs §5.3–5.4 independently,
-in **declared region order**, within the same RTC step — order is normative and
-deterministic). The configuration is the union across regions. A region reaching
-`final` is done; when **all** regions are `final`, a completion event (`__done__`)
-is generated for the orthogonal state's parent.
+### 5.6 Hierarchy & orthogonal regions
+On dispatch of event `e`, search from the most deeply nested active state up the parent
+chain; the first state with a transition for `e` whose guard passes handles it;
+ancestors aren't consulted further for that region. If `e` is deferred by the active
+config and unhandled, it is deferred (§5.8); otherwise unhandled events are discarded
+(hosts MAY log). An `orthogonal` state offers `e` to **every** region in **declared
+order** within one RTC step; the configuration is the union. When **all** regions reach
+`final`, the engine generates a `done` event for the orthogonal state's parent.
 
-### 5.6 Active objects, queues, spawning, messaging
-- Each instance has a **FIFO event queue**. `dispatch` = dequeue one event, run one
-  RTC step. The host's run loop drains queues; the engine prescribes only
-  per-instance RTC + FIFO ordering. **There is no periodic tick:** the only driver
-  is event arrival (including timer events, §5.8). An instance runs to quiescence
-  whenever its queue is non-empty.
-- **Instances form a tree.** The root is created by the host; others are **spawned**
-  by an action: `spawn(def, payload?) -> instanceId`. A spawned child runs
-  independently with its own queue and lifecycle. The spawner receives the child id
-  (via `result:` into a `data` variable). **Payload seeding:** each top-level `data`
-  variable of the child whose name matches a `payload` key is initialized to that
-  value (overriding its `init`); `external` variables are otherwise supplied by the
-  host.
-- **Messaging actions:** `post` → self; `send(to, …)` → another instance by id;
-  `emit` → the **parent**; `broadcast` → all **direct children**. Delivery is
-  asynchronous (enqueue for the target's next dispatch), preserving per-pair FIFO.
-- **Termination:** an instance whose top region reaches `final`, or that runs
-  `stop`, terminates: children are stopped first (post-order), exit actions run up
-  the tree, the queue and deferred set are dropped, and a `__child_done__` (with the
-  child id) is emitted to the parent.
+### 5.7 Active objects, queues, spawning, the bus
+- Each instance has a **FIFO queue**; `dispatch` = dequeue one event, run one RTC step.
+  There is **no periodic tick**; the only driver is event arrival (timers included).
+- **Tree.** The root is created by the host; others are **spawned** by an action:
+  `spawn(def, payload?) -> id`. A child runs independently with its own queue. The
+  spawner gets the child id (via `result:` into an esv). A spawned instance's `external`
+  esvs MAY be seeded from the spawn payload by name.
+- **Publishing.** `publish` hands an event to the **bus** (§8):
+  - **Directed** — `to:` resolves (CEL) to an instance id or list (e.g. `parent`, `id`,
+    a stored child id); delivered to exactly those instances, **ignoring scope**.
+  - **Undirected** — delivered to instances that `subscribe` to the event type and lie
+    within the event's `scope` (`internal`=self, `local`=this instance tree,
+    `global`=bus). An instance always receives its own `internal` publishes.
+  Delivery is asynchronous (enqueue for the target's next dispatch), per-pair FIFO.
+- **Termination.** An instance whose `top` reaches `final`, or that runs `stop`,
+  terminates: children stop first (post-order), `exit` actions run up the tree, and a
+  `done` event is delivered to the parent.
 
-> This is how a manager-of-many is modeled without violating "one machine = one
-> state" (see `examples/full.yaml`): a `downloads` instance stays in `online`; `add`
-> **spawns** a `download` active object per file; each `download` is its own machine
-> with its own single state, and they coordinate purely by posting events
-> (`download_done` back to the parent).
+> A manager-of-many (see `examples/full.yaml`) without breaking "one machine = one
+> state": a `downloads` instance spawns a `download` per file; each is its own machine;
+> a finished `download` does `publish { event: download_done, to: parent }`.
 
-### 5.7 Deferred events (normative)
-A state MAY list signals in `defer`. Semantics follow UML's **deferred set**, *not*
-a blind re-queue:
-1. When a dispatched event is **not** handled by the active configuration (§5.3) and
-   its signal is in the active config's effective `defer` set (union over active
-   states), the event is moved to the instance's **deferred set**, preserving
-   arrival order. It is **not** placed back on the tail.
-2. **Reinsertion is edge-triggered by state change.** Whenever an RTC step changes
-   the state configuration, every deferred event whose signal is **no longer
-   deferred** by the new configuration is moved, in original relative order, to the
-   **front** of the event queue (ahead of not-yet-processed fresh events) and will
-   be dispatched before them.
-3. A deferred event that is still deferred under the new configuration stays in the
-   deferred set.
+### 5.8 Deferred events
+A state MAY list events in `defer`. UML **deferred-set** semantics (not a tail
+re-queue): an unhandled event whose type is in the active config's effective defer set
+moves to the instance's **deferred set** (order preserved). **Edge-triggered:** when an
+RTC step changes the configuration, every deferred event no longer deferred is moved,
+in order, to the **front** of the queue. (An instance's state changes only by
+processing its own events, so re-checking on state change suffices — no poll, no
+busy-loop.) The deferred set is part of the snapshot (§8).
 
-Rationale (informative): an instance's state can change only by processing its own
-events, so a deferred event's eligibility can change only at a state transition.
-Edge-triggering on state change therefore needs **no timer/poll** and cannot
-busy-loop (which a naive tail re-queue would, when the deferred event is alone in
-the queue). The deferred set is part of the snapshot (§8).
+### 5.9 Timers (clock via adapter)
+Time comes from an injected **clock adapter** (§8), keeping the engine pure and tests
+deterministic. A state's `after: [{ duration, transition_to?, action?, guard? }]`
+schedules, on entry, a timer; on fire the engine enqueues an internal time event,
+dispatched as an ordinary guarded transition. Exiting the state cancels its timers. In
+conformance tests a **virtual clock** is advanced explicitly (`advance:`); no wall-clock
+time is used. Outstanding timers are part of the snapshot.
 
-### 5.8 Timers (normative; clock via adapter)
-Time is provided by an injected **clock adapter** (§8) so the engine stays a pure
-event-driven function and conformance tests stay deterministic.
-- A state's `after: [{ duration, target?, action?, guard? }]` schedules, on entry to
-  that state, a timer for `duration` (e.g. `30s`, `5m`, `500ms`). When the clock
-  fires it, the engine posts an internal **time event** to the instance; on dispatch
-  it behaves as an ordinary guarded transition. Exiting the state cancels its
-  pending `after` timers.
-- The clock adapter exposes `schedule(instanceId, timerId, duration)`,
-  `cancel(instanceId, timerId)`, and a monotonic `now()`. In production it is the
-  real clock. **In conformance tests it is a virtual clock the harness advances
-  explicitly** via an `advance:` step (§9); firing a timer enqueues the time event,
-  which is then dispatched under normal RTC. No wall-clock time is used in tests.
-- Outstanding timers (their `timerId`, target state, and fire deadline relative to
-  `now()`) are part of the snapshot so they survive suspend/resume.
-
-### 5.9 Action faults (normative)
-An RTC step (exit actions → transition actions → entry actions) is **atomic** with
-respect to faults.
-1. If any action raises an error, the engine **aborts the step**: the partial
-   transition is **not** applied (the configuration is left as it was at the start
-   of the step) and the triggering event is moved to a **dead-letter** record on the
-   instance.
-2. The instance is then **faulted**. If the machine declares `on_error`, the engine
-   takes that transition (from the current, pre-abort configuration) as a normal
-   transition to handle the fault; its target is typically an error state. If
-   `on_error` is absent, the instance enters the reserved **`__faulted__`** status
-   and **stops dispatching** further events (its queue is retained) until a host
-   `reset` re-activates it. Faulting is **per active object**, never global —
-   siblings and parent keep running.
-3. **Hangs:** the engine cannot preempt arbitrary host code. The portable
-   guard/action languages (CEL + structured actions, §6) are **total and bounded**
-   (no loops, no I/O) and therefore cannot hang. For host-pluggable languages the
-   engine enforces a **deadline via the clock adapter**; on overrun the step is
-   declared faulted (same path as §5.9.1–2). The deadline bounds the *machine's*
-   progress; a host thread may still be running — hosts MUST treat pluggable-language
-   actions as potentially long and SHOULD prefer the bounded default.
-
-Faults, dead-letters, and `__faulted__` status are observable (§8) so a host (a UI,
-an agent) can surface "instance X faulted in state Y on event Z."
+### 5.10 Action faults
+An RTC step (exit → transition → entry actions) is **atomic**. If an action raises, the
+engine **aborts the step** (no partial transition; the triggering event goes to a
+**dead-letter**) and **faults** the instance. If a state in scope handles the reserved
+**`error`** event in `on_events`, the engine delivers `error` (payload carries the
+fault) and dispatches it as a normal transition; otherwise the instance enters
+**`__faulted__`** and stops dispatching until a host `reset`. Faulting is per active
+object. **Hangs:** CEL + structured actions are total and bounded (no loops/IO) and
+cannot hang; pluggable host languages get a clock-adapter **deadline** (overrun ⇒
+fault). Faults/dead-letters/status are observable (§8).
 
 ## 6. Guard & action languages
 
-**Guards = CEL.** A guard is a CEL boolean expression evaluated against a binding of
-the in-scope extended-state (`data`) variables plus `event` (`event.signal`,
-`event.payload.*`). CEL is
-side-effect-free, non-Turing-complete, and has multi-language runtimes, which is
-what makes guards portable. An engine MUST provide CEL and MAY provide host
-languages (`groovy`, `js`, …) selected via `lang:` on a guard or via
-`languages.guard`.
+**Guards = CEL** over the in-scope `esvs` plus `event` (`event.payload.*`) and the
+intrinsics `id`/`parent`. CEL is side-effect-free, non-Turing-complete, and has
+multi-language runtimes — that is what makes guards portable. Engines MUST provide CEL
+and MAY provide host languages via `lang:` / `languages.guard`.
 
-**Actions = a structured set (id `harel`).** Each action is a single-key map; its
-argument *values* are CEL expressions evaluated against `(data, event)`:
+**Actions = a structured set (id `harel`)**; computed values are CEL over `(esvs,
+event, id, parent)`:
 
 | action | form | effect |
 |---|---|---|
-| assign | `{ assign: { var: "<cel>", … } }` | set in-scope variables (typed) |
-| post | `{ post: { signal: name, payload?: { k: "<cel>" } } }` | enqueue on self |
-| send | `{ send: { to: "<cel>", signal: name, payload?: {…} } }` | enqueue on instance id |
-| emit | `{ emit: { signal: name, payload?: {…} } }` | enqueue on parent |
-| broadcast | `{ broadcast: { signal: name, payload?: {…} } }` | enqueue on all children |
-| spawn | `{ spawn: { def: id, payload?: {…}, result?: var } }` | spawn child; id → `result` |
+| assign | `{ assign: { var: "<cel>", … } }` | set the nearest in-scope esv (typed) |
+| publish | `{ publish: { event: name, to?: "<cel>", payload?: { k: "<cel>" } } }` | hand an event to the bus (directed or subscribed) |
+| refresh | `{ refresh: {} }` or `{ refresh: { only: [name…] } }` | adopt `env` changes into external esvs (§5.4) |
+| spawn | `{ spawn: { def: id, payload?: {…}, result?: var } }` | spawn a child; id → `result` |
 | stop | `{ stop: {} }` | terminate this instance |
 
-Action values are CEL, so there is no second expression dialect to implement; the
-structured set is total and bounded (no loops, no I/O, no host calls). Richer needs
-⇒ a pluggable host action language via `languages.action` / `lang:`, which forfeits
-the bounded-execution guarantee (§5.9.3). `post/send/emit/broadcast/spawn` signals
-MUST be declared in the producing or receiving machine's `signals` and their
-payloads MUST type-check.
+`action` is an ordered **list**, so multiple `publish`es (or any mix) are allowed.
+Action values are CEL; the structured set is total and bounded. Richer needs ⇒ a
+pluggable host action language (forfeiting the bounded guarantee). Published/spawned
+event names and payloads MUST type-check against `events`.
 
-**Adapter contract** (what an engine calls):
-- `eval_guard(expr, ctx, event) -> bool`
-- `apply_action(action, ctx, event, api) -> ctx'` where `api` exposes
-  `post/send/emit/broadcast/spawn/stop`. Deterministic given `(ctx, event)` except
-  for spawn-id allocation.
+**Why CEL and not native YAML?** Structure and *literals* are native YAML (`type`,
+`init`, payload defaults). Only **guards** and **computed values** (an `assign` RHS, a
+published payload value) are CEL — those are runtime expressions over state, which YAML
+cannot represent (`bytes + n` is not data). cns used raw Ruby here; CEL keeps it
+sandboxed and language-portable.
 
 ## 7. Contracts (interfaces)
 
-A **contract** is a named, versioned interface a machine claims to satisfy:
-
 ```yaml
-harel_contract: 1
+contract: 1
 id: download_manager
 requires:
-  signals: [add]            # handled in some reachable state
-  states:  [online]         # declared
-  spawns:  [download]       # defIds it must be able to spawn
+  events: [add]          # handled in some reachable state
+  states: [online]       # declared
+  spawns: [download]     # defIds it must be able to spawn
 ```
-
-A static **validator** checks a machine against each declared contract: every
-required signal has at least one transition somewhere; every required state exists;
-every required `spawn` def appears in an action. Contract checking is part of
-conformance (a machine + contract + pass/fail). Contracts let a host demand, e.g.,
-"any download manager must accept `add`, reach `online`, and spawn `download`."
-Contracts are extensible: a machine MAY satisfy several; a contract MAY be
-versioned and a newer contract MAY add requirements (a machine satisfying contract
-v2 satisfies v1 if requirements are additive).
+A static **validator** checks a machine against each declared contract: every required
+event has a handler somewhere; every required state exists; every required `spawn` def
+appears in an action. Contract checking is part of conformance. Contracts are
+extensible: a machine MAY satisfy several; a newer contract MAY add requirements.
 
 ## 8. Persistence & host adapters
 
-The engine is pure logic; the host provides:
-- **Storage adapter** — load/save a serialized **instance snapshot**:
-  `{ def_id, def_version, id, parent_id, status, state_config, data, queue,
-  deferred, timers, dead_letter, history }`, where `data` is the live values of all
-  in-scope variables (root + active states). `status ∈ {active, faulted,
-  terminated}`. Snapshots MUST round-trip (serialize → deserialize → identical
-  behavior) and MUST be representable as JSON/YAML so an instance suspended by one
-  engine can, in principle, resume in another.
-- **Clock adapter** — `schedule/cancel/now` (§5.8). The conformance harness supplies
-  a virtual clock.
-- **Action/side-effect** — the engine implements messaging/spawn/stop; the host
-  wires the run loop and any external effects a *custom* (non-default) action
-  language exposes.
-- **Observer** (optional) — a callback stream of `{ instance, transition, entered,
-  exited, emitted, spawned, faulted }` per RTC step, for hosts/TUIs/agents.
+The engine is pure logic; the host provides **adapters**, each with a **simple
+in-memory default the conformance harness uses**:
+- **Bus** — routes published events (directed + subscription/scope, §5.7). Default:
+  in-process delivery. Production: a network/broker transport.
+- **Queue** — per-instance FIFO (default: in-memory).
+- **Clock** — `schedule/cancel/now` (§5.9); default: the virtual clock.
+- **Store** — load/save an **instance snapshot**: `{ def_id, def_version, id, parent_id,
+  status, state_config, esvs, queue, deferred, timers, dead_letter, history }`, where
+  `esvs` is the live values of all in-scope variables. Snapshots MUST round-trip and be
+  JSON/YAML-representable (portable across language implementations). `status ∈ {active,
+  faulted, terminated}`.
+- **Observer** (optional) — a per-step stream `{ instance, transition, entered, exited,
+  published, spawned, faulted }` for UIs/agents.
+
+Adapters are selected by the host; the machine YAML never names a transport.
 
 ## 9. Conformance test format (normative)
-
-`conformance/` holds language-neutral cases. Each case is a directory with:
 
 ```
 conformance/<case>/
@@ -438,91 +362,69 @@ conformance/<case>/
   test.yaml             # the scenario + expectations
 ```
 
-`test.yaml`:
 ```yaml
-title: orthogonal regions broadcast
-data: { max_active: 3 }            # initial external/data overrides on root
+title: external change triggers reprovision
+external: { password: 'old' }       # initial host-supplied external esvs on root
 steps:
-  - send: { signal: go_online }     # post to root, then run to quiescence
+  - send: { event: add, payload: { url: 'http://x' } }
     expect:
       config: [online]              # active leaf state ids (sorted)
-      data: { active: 0 }
-      emitted: []                   # signals emitted to parent/host, in order
-  - send: { signal: add, payload: { url: 'http://x' } }
+      esvs: { active: 0 }
+      published: []                 # events handed to the bus this step, in order
+  - send: { event: env, payload: { changed: { password: 'new' } } }
     expect:
-      spawned: [download]           # defIds spawned this step, in order
-  - advance: 30s                    # virtual-clock advance; fires due timers
+      config: [reprovision]
+  - advance: 10s                    # virtual-clock advance; fires due timers
     expect:
-      config: [timeout]
-  - send: { signal: bad_payload }
+      config: [connecting]
+  - send: { event: bogus }
     expect:
-      rejected: true                # payload/signal failed validation (not enqueued)
+      rejected: true                # undeclared/invalid -> not enqueued
 trace: optional                     # if set, exact entry/exit/action ordering
 ```
+A run: validate against the schema, load definitions, create the root, then per step
+apply `send`/`advance`, **run all instances to quiescence**, and check expectations.
+`config` is the sorted active leaf set across live instances (or scoped via
+`instance:`). `faulted` / `dead_letter` MAY be asserted.
 
-A run: validate definitions against `schema/machine.schema.json`, load them, create
-the root instance, then for each step apply `send`/`advance`, **run all instances to
-quiescence** (all queues empty), and check expectations. `config` is the sorted set
-of active leaf states across all live instances (or scoped via an `instance:`
-selector). `faulted:` / `dead_letter:` MAY be asserted. An engine passes iff all
-expectations match. Ordering-sensitive cases set `trace`.
-
-The suite MUST cover: leaf transitions; guards (CEL); internal/local/external; LCA
-exit/entry ordering; composite initial; orthogonal broadcast + completion + region
-order; shallow & deep history; choice/junction; typed-payload accept/reject;
-defer (deferred-set + edge-triggered reinsertion + no busy-loop); timers via virtual
-clock (schedule/fire/cancel-on-exit); spawn/send/emit/broadcast/stop + FIFO; action
-faults (`on_error` present and absent, dead-letter); termination + child cleanup;
-contract pass/fail; and snapshot round-trip + migration (§10).
+The suite MUST cover: leaf transitions; CEL guards; internal/local/external; LCA
+ordering; `initial` transitions with actions; composite & orthogonal (region order +
+`done`); shallow/deep history; typed-payload accept/reject; `defer`; timers (virtual
+clock); `esvs` scope/shadow/re-init; `external` esvs + `env`/`refresh`; publish
+(directed, subscription, scope) + FIFO; spawn/stop + child cleanup; faults (`error`
+handled and not, dead-letter); contracts; snapshot round-trip + migration.
 
 ## 10. Versioning, hot-swap & migration (normative)
 
-Definitions are **immutable and versioned** (`version:`). A snapshot records
-`def_version`. When the host loads a definition whose current version differs from a
-live instance's `def_version`:
-
-### 10.1 Pin by default
-A live instance keeps running under the **version it started on** until it
-terminates. The host MUST retain the old definition while any instance pins to it.
-New instances use the new version. This guarantees a long-lived instance is never
-silently mutated mid-flight.
-
-### 10.2 Forward migration at a safe point
-A newer definition MAY declare migrations:
-```yaml
-migrations:
-  - from: 1
-    to: 2
-    when: "state in ['up','down']"               # CEL over a `state` binding
-    state_map: { old_state: new_state }          # remap active leaves
-    data: [ { assign: { new_var: "old_var" } } ] # transform extended state
-```
-A migration is applied **only at a safe point**, defined as: the instance is
-**quiescent** (empty queue, no in-progress RTC, empty deferred set) **and** its
-current configuration satisfies `when` and is covered by `state_map`. Otherwise the
-instance stays pinned and is retried at its next quiescent point (or runs to
-termination on the old version). Migration is itself snapshot-atomic: it either
-fully applies (config remapped, data transformed, `def_version` bumped) or not at
-all. `when` and `data` use CEL with a binding exposing `state` (the active leaf id,
-or list for orthogonal) plus the existing variables.
-
-### 10.3 Event-schema evolution (recommendation; partly normative)
-- Payload schemas SHOULD evolve **additively**: add optional fields, never
-  repurpose or retype an existing field, never make an optional field required.
-  Additive changes keep old producers compatible (MUST be honored by validators).
-- For a **breaking** change, the recommended pattern is an **adapter machine** (an
-  anti-corruption layer): a small machine that accepts legacy-version signals and
-  `emit`s/`send`s current-version signals. Because adapters are ordinary machines,
-  no special engine feature is required; the producer targets the adapter, which
-  re-emits in the new schema. This keeps strict typing while letting old and new
-  coexist during rollout.
+Definitions are **immutable and versioned** (`version`). A snapshot records
+`def_version`.
+- **10.1 Pin by default.** A live instance keeps its original version until it
+  terminates; the host retains old definitions while any instance pins to them. New
+  instances use the new version.
+- **10.2 Forward migration at a safe point.** A newer definition MAY declare:
+  ```yaml
+  migrations:
+    - from: 1
+      to: 2
+      when: "state in ['up','down']"            # CEL over a `state` binding
+      state_map: { up: online, down: offline }   # remap active leaves
+      esvs: [ { assign: { new_var: "old_var" } } ]
+  ```
+  Applied **only at a safe point**: the instance is **quiescent** (empty queue, no
+  in-progress RTC, empty deferred set) **and** its configuration satisfies `when` and is
+  covered by `state_map`. Otherwise it stays pinned and retries next quiescence.
+  Migration is snapshot-atomic (config remapped, esvs transformed, `def_version`
+  bumped, or nothing).
+- **10.3 Event-schema evolution.** Payloads SHOULD evolve **additively** (add optional
+  fields; never repurpose/retype/require). For breaking changes, the recommended
+  pattern is an **adapter machine** (anti-corruption layer) that subscribes to legacy
+  events and publishes current ones — no special engine feature needed.
 
 ## 11. Non-goals / future (informative)
 
-- **SaaS / distributed queues & agent hosting**: instances communicate only via the
-  messaging API, so queues can later be backed by a network transport without
-  changing machine semantics. A multi-tenant host that exposes "legal events from
-  the current state" to LLM agents (forcing well-maintained agent state) is a
-  separate product layer. Out of scope for the engine.
-- Visual editor, codegen, real-time/deadline scheduling beyond §5.8.
+- **SaaS / distributed bus & agent hosting:** instances communicate only via published
+  events, so the bus can be network-backed without changing semantics. A multi-tenant
+  host exposing "legal events from the current state" to LLM agents (forcing
+  well-maintained agent state) is a separate product layer.
+- Visual editor, codegen, real-time scheduling beyond §5.9.
 - Cross-instance transactions; instances are independent active objects by design.
