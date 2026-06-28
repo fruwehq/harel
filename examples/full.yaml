@@ -1,0 +1,158 @@
+# full.yaml — exercises every harel feature (SPEC.md §4-§10).
+# Two definitions separated by `---`: a `provider` (root) and the `instance` it
+# spawns. Demonstrates: typed context + signals, guards (CEL), structured actions,
+# composite + orthogonal states, history, defer, timers (after), on_error/faults,
+# spawn/send/emit/broadcast, contracts, and a version migration.
+
+harel: 1
+id: provider
+version: 2
+contracts: [provider]
+
+languages: { guard: cel, action: harel }
+
+context:
+  api_key:    { type: string, default: null, external: true }   # host-supplied secret
+  region:     { type: string, default: "ewr",  external: true } # host-supplied setting
+  attempts:   { type: int,    default: 0 }
+  last_child: { type: string, default: null }                   # id of last spawned instance
+
+signals:
+  configure: {}
+  probe: {}
+  probe_ok: {}
+  probe_fail: {}
+  create_instance:
+    payload:
+      name:    { type: string, required: true }
+      bundles: { type: list,   default: [] }
+  instance_done:
+    payload: { id: { type: string, required: true } }
+  reset: {}
+
+initial: unconfigured
+
+# Machine-level fault handler: any action error lands here (SPEC §5.9).
+on_error: { target: faulted }
+
+states:
+
+  unconfigured:
+    on:
+      configure: { target: configured, guard: "api_key != null" }
+
+  # Composite: provider is "configured" and probes reachability in a sub-region,
+  # while deferring create_instance until it is known reachable.
+  configured:
+    type: composite
+    initial: probing
+    entry:
+      - assign: { attempts: "0" }
+    on:
+      # Handled by the parent regardless of sub-state.
+      instance_done:
+        internal: true
+        action:
+          - assign: { last_child: "null" }
+    states:
+
+      probing:
+        # Hold create_instance until we leave `probing` (deferred-set, SPEC §5.7).
+        defer: [create_instance]
+        entry:
+          - post: { signal: probe }
+        # If no probe result within 30s, give up (timer via clock adapter, §5.8).
+        after:
+          - { duration: 30s, target: unreachable }
+        on:
+          probe:
+            internal: true
+            action:
+              - assign: { attempts: "attempts + 1" }
+          probe_ok:   { target: reachable }
+          probe_fail: { target: unreachable, guard: "attempts >= 3" }
+
+      reachable:
+        # Now create_instance is no longer deferred -> queued ones replay here.
+        on:
+          create_instance:
+            internal: true
+            action:
+              - spawn:
+                  def: instance
+                  payload: { name: "event.payload.name", bundles: "event.payload.bundles" }
+                  result: last_child
+
+      unreachable:
+        on:
+          probe: { target: probing }
+
+  # Reached via on_error; operator clears it with `reset`.
+  faulted:
+    on:
+      reset: { target: unconfigured }
+
+# Forward migration from v1: v1 had a flat `ready` state that v2 splits; map it
+# onto the new reachable sub-state, only when the instance is safely quiescent.
+migrations:
+  - from: 1
+    to: 2
+    when: "state == 'ready'"
+    state_map: { ready: configured.reachable }
+    context:
+      - assign: { attempts: "0" }
+
+---
+
+# The spawned per-instance machine. Orthogonal: provisioning runs OS bring-up and
+# package install concurrently; history lets a paused install resume where it was.
+harel: 1
+id: instance
+version: 1
+contracts: [instance]
+
+context:
+  name:    { type: string, default: null, external: true }
+  bundles: { type: list,   default: [] }
+
+signals:
+  os_ready: {}
+  pkg_done: {}
+  pause: {}
+  resume: {}
+  teardown: {}
+
+initial: provisioning
+
+states:
+
+  provisioning:
+    type: orthogonal
+    regions:
+      # Region 1: operating-system bring-up.
+      - initial: booting
+        states:
+          booting:
+            on: { os_ready: { target: os_done } }
+          os_done: { type: final }
+      # Region 2: package installation, resumable via deep history.
+      - initial: installing
+        states:
+          installing:
+            history: deep
+            on:
+              pause:    { target: paused }
+              pkg_done: { target: pkg_ok }
+          paused:
+            on: { resume: { target: installing } }   # deep history restores sub-state
+          pkg_ok: { type: final }
+    on:
+      teardown: { target: done }
+
+  # When both regions reach `final`, the orthogonal state completes; we stop and
+  # emit completion to the parent provider.
+  done:
+    type: final
+    entry:
+      - emit: { signal: instance_done, payload: { id: "name" } }
+      - stop: {}
