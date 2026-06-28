@@ -1,0 +1,5 @@
+contract: 1
+id: download
+requires:
+  events: [connected, eof]   # must be handled in some reachable state
+  states: [active]           # must be declared

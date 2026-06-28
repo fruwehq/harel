@@ -1,0 +1,6 @@
+contract: 1
+id: download_manager
+requires:
+  events: [add]          # must be handled in some reachable state
+  states: [online]       # must be declared
+  spawns: [download]     # must be able to spawn this def
