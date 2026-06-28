@@ -1,0 +1,17 @@
+title: guarded leaf transition — configured only when api_key is set
+steps:
+  # api_key is unset (null) -> guard "api_key != null" fails -> no transition.
+  - send: { signal: configure }
+    expect:
+      config: [unconfigured]
+
+  # Host supplies the external var; now the same signal transitions.
+  - context: { api_key: 'k' }
+    send: { signal: configure }
+    expect:
+      config: [configured]
+
+  # configured has no handler for configure -> event discarded, state unchanged.
+  - send: { signal: configure }
+    expect:
+      config: [configured]

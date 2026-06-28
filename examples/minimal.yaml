@@ -1,0 +1,13 @@
+# The smallest valid harel machine: two leaf states and one guarded transition.
+# A provider is `unconfigured` until an api_key (host-supplied) is present.
+harel: 1
+id: provider
+version: 1
+context:
+  api_key: { type: string, default: null, external: true }   # null == unset
+initial: unconfigured
+states:
+  unconfigured:
+    on:
+      configure: { target: configured, guard: "api_key != null" }
+  configured: {}

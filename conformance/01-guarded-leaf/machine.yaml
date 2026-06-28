@@ -1,0 +1,14 @@
+harel: 1
+id: provider
+version: 1
+context:
+  api_key: { type: string, default: null, external: true }   # null == unset
+languages: { guard: cel, action: harel }
+signals:
+  configure: {}
+initial: unconfigured
+states:
+  unconfigured:
+    on:
+      configure: { target: configured, guard: "api_key != null" }
+  configured: {}

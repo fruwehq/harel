@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harel.dev/schema/machine.schema.json",
+  "title": "harel machine definition",
+  "description": "Strict structural schema for a harel statechart definition (SPEC.md §4). Validates one YAML/JSON document. Semantics (RTC, LCA, defer, timers) live in SPEC.md and the conformance suite.",
+  "type": "object",
+  "required": ["harel", "id", "version", "initial", "states"],
+  "additionalProperties": false,
+  "properties": {
+    "harel": { "const": 1, "description": "Format version." },
+    "id": { "$ref": "#/$defs/identifier", "description": "Stable definition id." },
+    "version": { "type": "integer", "minimum": 1, "description": "Definition version (migration, SPEC §10)." },
+    "contracts": { "type": "array", "items": { "$ref": "#/$defs/identifier" } },
+    "languages": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "guard": { "type": "string", "default": "cel" },
+        "action": { "type": "string", "default": "harel" }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/contextVar" }
+    },
+    "signals": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/signalDecl" }
+    },
+    "initial": { "$ref": "#/$defs/identifier" },
+    "on_error": { "$ref": "#/$defs/transition" },
+    "migrations": { "type": "array", "items": { "$ref": "#/$defs/migration" } },
+    "states": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/state" }
+    }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+    "dottedRef": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" },
+    "cel": { "type": "string", "description": "A CEL expression (string)." },
+    "valueType": { "enum": ["string", "int", "float", "bool", "map", "list"] },
+    "duration": { "type": "string", "pattern": "^[0-9]+(ms|s|m|h)$" },
+
+    "contextVar": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/valueType" },
+        "default": { "description": "Initial value; null means unset." },
+        "external": { "type": "boolean", "default": false }
+      }
+    },
+
+    "signalDecl": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": false,
+            "properties": {
+              "type": { "$ref": "#/$defs/valueType" },
+              "required": { "type": "boolean", "default": false },
+              "default": {}
+            }
+          }
+        }
+      }
+    },
+
+    "action": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "assign": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/cel" } },
+        "post": { "$ref": "#/$defs/message" },
+        "emit": { "$ref": "#/$defs/message" },
+        "broadcast": { "$ref": "#/$defs/message" },
+        "send": {
+          "allOf": [{ "$ref": "#/$defs/message" }],
+          "type": "object",
+          "required": ["to", "signal"],
+          "properties": { "to": { "$ref": "#/$defs/cel" } }
+        },
+        "spawn": {
+          "type": "object",
+          "required": ["def"],
+          "additionalProperties": false,
+          "properties": {
+            "def": { "$ref": "#/$defs/identifier" },
+            "payload": { "type": "object", "additionalProperties": { "$ref": "#/$defs/cel" } },
+            "result": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        "stop": { "type": "object", "maxProperties": 0 }
+      }
+    },
+    "message": {
+      "type": "object",
+      "required": ["signal"],
+      "additionalProperties": false,
+      "properties": {
+        "to": { "$ref": "#/$defs/cel" },
+        "signal": { "$ref": "#/$defs/identifier" },
+        "payload": { "type": "object", "additionalProperties": { "$ref": "#/$defs/cel" } }
+      }
+    },
+    "actionList": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": { "$ref": "#/$defs/dottedRef" },
+        "guard": { "$ref": "#/$defs/cel" },
+        "lang": { "type": "string" },
+        "action": { "$ref": "#/$defs/actionList" },
+        "internal": { "type": "boolean" },
+        "local": { "type": "boolean" }
+      }
+    },
+    "transitionOrList": {
+      "oneOf": [
+        { "$ref": "#/$defs/transition" },
+        { "type": "array", "items": { "$ref": "#/$defs/transition" }, "minItems": 1 }
+      ]
+    },
+
+    "after": {
+      "type": "object",
+      "required": ["duration"],
+      "additionalProperties": false,
+      "properties": {
+        "duration": { "$ref": "#/$defs/duration" },
+        "target": { "$ref": "#/$defs/dottedRef" },
+        "guard": { "$ref": "#/$defs/cel" },
+        "action": { "$ref": "#/$defs/actionList" }
+      }
+    },
+
+    "region": {
+      "type": "object",
+      "required": ["initial", "states"],
+      "additionalProperties": false,
+      "properties": {
+        "initial": { "$ref": "#/$defs/identifier" },
+        "states": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/state" } }
+      }
+    },
+
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["simple", "composite", "orthogonal", "final"], "default": "simple" },
+        "entry": { "$ref": "#/$defs/actionList" },
+        "exit": { "$ref": "#/$defs/actionList" },
+        "initial": { "$ref": "#/$defs/identifier" },
+        "states": { "type": "object", "additionalProperties": { "$ref": "#/$defs/state" } },
+        "regions": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/region" } },
+        "on": { "type": "object", "additionalProperties": { "$ref": "#/$defs/transitionOrList" } },
+        "after": { "type": "array", "items": { "$ref": "#/$defs/after" } },
+        "defer": { "type": "array", "items": { "$ref": "#/$defs/identifier" } },
+        "history": { "enum": ["none", "shallow", "deep"], "default": "none" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "composite" } }, "required": ["type"] },
+          "then": { "required": ["initial", "states"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "orthogonal" } }, "required": ["type"] },
+          "then": { "required": ["regions"] }
+        }
+      ]
+    },
+
+    "migration": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "integer", "minimum": 1 },
+        "to": { "type": "integer", "minimum": 1 },
+        "when": { "$ref": "#/$defs/cel" },
+        "state_map": { "type": "object", "additionalProperties": { "$ref": "#/$defs/dottedRef" } },
+        "context": { "$ref": "#/$defs/actionList" }
+      }
+    }
+  }
+}
