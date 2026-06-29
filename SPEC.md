@@ -392,7 +392,8 @@ ordering; `initial` transitions with actions; composite & orthogonal (region ord
 `done`); shallow/deep history; typed-payload accept/reject; `defer`; timers (virtual
 clock); `esvs` scope/shadow/re-init; `external` esvs + `env`/`refresh`; publish
 (directed, subscription, scope) + FIFO; spawn/stop + child cleanup; faults (`error`
-handled and not, dead-letter); contracts; snapshot round-trip + migration.
+handled and not, dead-letter); contracts; snapshot round-trip + migration. The
+operator CLI surface is pinned separately by CLI conformance (§13.6).
 
 ## 10. Versioning, hot-swap & migration (normative)
 
@@ -475,3 +476,76 @@ stateDiagram-v2
   classDef active fill:#9f9,stroke:#3a3
   class unlocked active
 ```
+
+## 13. Command-line interface (normative)
+
+Every implementation MUST provide a `harel` CLI with the commands, options, exit
+codes, and JSON output below, so operators and tests interact with any language's
+engine **identically**. (The *library* API stays language-idiomatic; only the CLI and
+the JSON/snapshot formats are standardized — the conformance suite already guarantees
+behavioral parity.)
+
+### 13.1 The store
+CLI state persists in a **store** — a directory selected by `--store <dir>` (default
+`$HAREL_STORE`, else `./.harel`). It holds the live instances (their snapshots, §8),
+registered definitions, and the virtual clock. Its on-disk layout is an
+implementation detail; the normative contract is CLI behavior + the JSON I/O (§13.4).
+A state-changing command loads the affected instances, runs **all** instances to
+quiescence (§5.7), and persists atomically.
+
+### 13.2 Global options & exit codes
+- `--store <dir>` — the store (above). `--json` — machine-readable stdout (otherwise
+  human-readable). `--help` / `--version`.
+- Exit codes (normative): `0` success · `2` usage error · `3` validation error ·
+  `4` not found (instance/definition) · `5` instance faulted · `1` other runtime
+  error. Diagnostics go to **stderr**; the command result goes to **stdout**.
+
+### 13.3 Commands
+| command | effect |
+|---|---|
+| `validate <machine.yaml>` | schema + static checks (references, contracts). Exit 3 on failure. |
+| `export <machine.yaml> [--format mermaid] [--state <instance>]` | diagram to stdout (§12); `--state` highlights that instance's current config. |
+| `new <machine.yaml> [--id <id>] [--external k=v]…` | register the definition, create a root instance, print its id (or `{ "id": … }`). |
+| `send <instance> <event> [--payload k=v]… [--payload-json <json>]` | deliver `event`, run to quiescence; print the resulting state (§13.4). |
+| `advance <duration>` | advance the virtual clock (`30s`, `5m`, …), fire due timers, run to quiescence. |
+| `env <instance> --changed k=v[,k=v]…` | post the reserved `env` event with `payload.changed` (§5.4). |
+| `state <instance> [--json]` | the instance's status, active leaves, and esvs (§13.4). |
+| `list [--json]` | every instance in the store (§13.4). |
+| `snapshot <instance>` | print the raw snapshot JSON (§8). |
+| `restore <snapshot.json>` | load a snapshot into the store. |
+
+`--payload k=v` is repeatable; values are **coerced to the event's declared payload
+types** (§4.3) and MUST validate, else exit 3. `--payload-json` supplies the whole
+payload as one JSON object. `--external k=v` seeds `external` esvs at creation (§4.4).
+
+### 13.4 JSON output (normative shapes)
+With `--json`, stdout is exactly one of:
+- `state` → `{ "instance": str, "def": "id@version", "status": "active|faulted|terminated", "config": [str…], "esvs": {…} }` (`config` sorted).
+- `send` → the `state` object for the targeted instance plus `"published": [str…]` (events handed to the bus this run, in order).
+- `list` → `[ { "id": str, "def": "id@version", "parent": str|null, "status": str, "config": [str…] }, … ]` (ordered by id).
+- `validate` → `{ "valid": bool, "errors": [ { "path": str, "message": str }, … ] }`.
+- `snapshot` → the §8 snapshot object.
+
+Keys and types are part of the standard; implementations MUST match them.
+
+### 13.5 Determinism
+The CLI uses the **virtual clock** (§5.9): time advances only via `advance`, starting
+at 0 in a fresh store. CLI sessions are therefore reproducible and testable. (A
+real-time clock for daemon/operational use is a future option, §11.)
+
+### 13.6 CLI conformance
+`conformance/cli/<case>/` holds a `cli.yaml` of steps run against a fresh temp store;
+machine files referenced live in the case directory:
+```yaml
+steps:
+  - run: [new, machine.yaml]
+    expect: { exit: 0 }
+    capture: inst                       # stdout → a variable
+  - run: [send, $inst, coin, --payload, "amount=100", --json]
+    expect:
+      exit: 0
+      json: { config: [unlocked], status: active }
+```
+A harness invokes the implementation's `harel` binary; a case passes iff every step's
+exit code and stdout match (`json` compared structurally; otherwise `stdout`
+verbatim). This pins cross-language **CLI parity** the way §9 pins engine semantics.

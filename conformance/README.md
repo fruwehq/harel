@@ -10,6 +10,9 @@ Each `<case>/` directory contains:
 - `contracts/*.yaml` — optional, for contract-validation cases.
 - `test.yaml` — the scenario (`steps:` of `send:` / `advance:` + `expect:`).
 
+`cli/<case>/` cases instead hold a `cli.yaml` (steps of `run:`/`expect:`) that pin the
+standard CLI surface (SPEC §13.6), run against a fresh temp store.
+
 A harness loads the definitions, creates the root instance, and for each step
 posts the event (or advances the virtual clock) and runs **all** instances to
 quiescence before checking `expect`. See `01-guarded-leaf/` for the minimal shape.
