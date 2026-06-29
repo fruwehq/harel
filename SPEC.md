@@ -66,8 +66,10 @@ NOT change core dispatch semantics. Machine YAML MUST validate against
 - **Region** — an independent area of a composite/orthogonal state with its own active
   substate. Orthogonal regions run within one RTC step of the *same* instance
   (synchronous), unlike spawned instances (asynchronous).
-- **Pseudostates** — the **initial transition** of a composite/region, `final`,
-  `history` (shallow/deep), `choice` (dynamic), `junction` (static).
+- **Pseudostates** — the **initial transition** of a composite/region, `final`, and
+  `history` (shallow/deep). Conditional branching is expressed by **guarded transition
+  lists** (§4.5, first passing guard wins); dedicated `choice`/`junction` pseudostates
+  are a possible future addition.
 - **Event** — an occurrence of a declared **event type** carrying a typed payload.
   Some event types are **reserved lifecycle events**: `initial`, `entry`, `exit`
   (state lifecycle, §5.3/§5.5), `env` (external change, §5.4), `error` (fault, §5.10),
@@ -386,14 +388,28 @@ steps:
       rejected: true                # undeclared/invalid -> not enqueued
 trace: optional                     # if set, exact entry/exit/action ordering
 ```
-A run: validate against the schema, load definitions, create the root, then per step
-apply `send`/`advance`, **run all instances to quiescence**, and check expectations.
-`config` is the sorted active leaf set across live instances (or scoped via
-`instance:`). `faulted` / `dead_letter` MAY be asserted.
+A run: validate against the schema, load definitions, **create the root instance with
+id `root`**, then per step apply `send`/`advance`, **run all instances to quiescence**,
+and check expectations. Specifics:
+- A `send` targets the root by default, or another instance via `instance: <id>`
+  (spawned child ids are `root/1`, `root/2`, … per §5.7).
+- `config` (sorted) and `esvs` in an `expect` refer to the **addressed** instance
+  (the root unless `instance:` is set). `esvs` asserts the **resolved in-scope** values
+  (innermost declaration wins, as a guard would read them). Assert other instances with
+  `instances: { <id>: { config?, esvs?, status? } }`. `status ∈ {active, faulted,
+  terminated}`; a terminated instance is gone from `config`.
+- `spawned` (defIds) and `published` (event names) are the per-step lists across the
+  whole run, in order. `rejected: true` asserts the step's event failed validation.
+- `external: { name: value }` at the top seeds the root's `external` esvs; a step's
+  `env` event (`payload.changed`) drives later changes (§5.4).
+- A case MAY set `roundtrip: true`: the harness serializes and reloads **every**
+  instance's snapshot (§8) between steps; behavior MUST be identical, exercising
+  snapshot round-trip.
 
-The suite MUST cover: leaf transitions; CEL guards; internal/local/external; LCA
-ordering; `initial` transitions with actions; composite & orthogonal (region order +
-`done`); shallow/deep history; typed-payload accept/reject; `defer`; timers (virtual
+The suite MUST cover: leaf transitions; CEL guards (incl. guarded transition lists,
+first-match-wins); internal/local/external; LCA ordering; `initial` transitions with
+actions; composite & orthogonal (region order + `done`); shallow/deep history;
+typed-payload accept/reject; `defer`; timers (virtual
 clock); `esvs` scope/shadow/re-init; `external` esvs + `env`/`refresh`; publish
 (directed, subscription, scope) + FIFO; spawn/stop + child cleanup; faults (`error`
 handled and not, dead-letter); contracts; snapshot round-trip + migration. The
