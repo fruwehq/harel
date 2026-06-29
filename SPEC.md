@@ -405,6 +405,11 @@ and check expectations. Specifics:
 - A case MAY set `roundtrip: true`: the harness serializes and reloads **every**
   instance's snapshot (§8) between steps; behavior MUST be identical, exercising
   snapshot round-trip.
+- `status` (of the addressed instance) and `dead_letter: true` (a dead-letter record
+  exists) MAY be asserted in an `expect`.
+- A case MAY instead assert **static validation** (with no `steps`):
+  `static: { valid: bool, errors?: [str…] }` runs the schema + contract validator (§7)
+  and checks the outcome.
 
 The suite MUST cover: leaf transitions; CEL guards (incl. guarded transition lists,
 first-match-wins); internal/local/external; LCA ordering; `initial` transitions with
