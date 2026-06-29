@@ -247,7 +247,11 @@ order** within one RTC step; the configuration is the union. When **all** region
 - **Tree.** The root is created by the host; others are **spawned** by an action:
   `spawn(def, payload?) -> id`. A child runs independently with its own queue. The
   spawner gets the child id (via `result:` into an esv). A spawned instance's `external`
-  esvs MAY be seeded from the spawn payload by name.
+  esvs MAY be seeded from the spawn payload by name. **Ids are deterministic:** the root
+  id is supplied by the host/CLI (`new <id>`), and a spawned child's id is derived from
+  its parent's id and a per-parent monotonic spawn counter (e.g. `parent/1`), so every
+  engine allocates identical ids and any instance is addressable in conformance and the
+  CLI.
 - **Publishing.** `publish` hands an event to the **bus** (§8):
   - **Directed** — `to:` resolves (CEL) to an instance id or list (e.g. `parent`, `id`,
     a stored child id); delivered to exactly those instances, **ignoring scope**.
@@ -505,7 +509,7 @@ quiescence (§5.7), and persists atomically.
 |---|---|
 | `validate <machine.yaml>` | schema + static checks (references, contracts). Exit 3 on failure. |
 | `export <machine.yaml> [--format mermaid] [--state <instance>]` | diagram to stdout (§12); `--state` highlights that instance's current config. |
-| `new <machine.yaml> [--id <id>] [--external k=v]…` | register the definition, create a root instance, print its id (or `{ "id": … }`). |
+| `new <id> <machine.yaml> [--external k=v]…` | register the definition and create a root instance with intrinsic id `<id>` (exit 2 if it already exists); print its initial state (§13.4). |
 | `send <instance> <event> [--payload k=v]… [--payload-json <json>]` | deliver `event`, run to quiescence; print the resulting state (§13.4). |
 | `advance <duration>` | advance the virtual clock (`30s`, `5m`, …), fire due timers, run to quiescence. |
 | `env <instance> --changed k=v[,k=v]…` | post the reserved `env` event with `payload.changed` (§5.4). |
@@ -520,7 +524,7 @@ payload as one JSON object. `--external k=v` seeds `external` esvs at creation (
 
 ### 13.4 JSON output (normative shapes)
 With `--json`, stdout is exactly one of:
-- `state` → `{ "instance": str, "def": "id@version", "status": "active|faulted|terminated", "config": [str…], "esvs": {…} }` (`config` sorted).
+- `state` / `new` → `{ "instance": str, "def": "id@version", "status": "active|faulted|terminated", "config": [str…], "esvs": {…} }` (`config` sorted).
 - `send` → the `state` object for the targeted instance plus `"published": [str…]` (events handed to the bus this run, in order).
 - `list` → `[ { "id": str, "def": "id@version", "parent": str|null, "status": str, "config": [str…] }, … ]` (ordered by id).
 - `validate` → `{ "valid": bool, "errors": [ { "path": str, "message": str }, … ] }`.
@@ -538,10 +542,9 @@ real-time clock for daemon/operational use is a future option, §11.)
 machine files referenced live in the case directory:
 ```yaml
 steps:
-  - run: [new, machine.yaml]
+  - run: [new, t1, machine.yaml]
     expect: { exit: 0 }
-    capture: inst                       # stdout → a variable
-  - run: [send, $inst, coin, --payload, "amount=100", --json]
+  - run: [send, t1, coin, --payload, "amount=100", --json]
     expect:
       exit: 0
       json: { config: [unlocked], status: active }
