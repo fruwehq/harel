@@ -31,9 +31,12 @@ guards/actions with CEL + structured actions.
 - **Versioned definitions + migrations** — long-lived instances pin to the version
   they started on and migrate forward only at a safe point (hot-swap)
 
-Status: **specification**. See [`SPEC.md`](SPEC.md). The JSON Schema for machine
-YAML is in [`schema/`](schema/); worked examples in [`examples/`](examples/);
-the cross-language test suite in [`conformance/`](conformance/).
+Status: **specification**. This repository holds **only the normative text**: see
+[`SPEC.md`](SPEC.md), with the JSON Schema for machine YAML in [`schema/`](schema/) and
+worked examples in [`examples/`](examples/). The cross-language **conformance suite**
+(the executable correctness target) lives in its own repository,
+[`fruwehq/harel-conformance`](https://github.com/fruwehq/harel-conformance), which
+implementations pin as a submodule.
 
 Not coupled to any application; downstream users provide their own bus/queue/clock/
 store adapters (a simple in-memory default ships for tests) and machine YAML. A

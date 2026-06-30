@@ -41,7 +41,9 @@ Keywords MUST / SHOULD / MAY per RFC 2119.
 
 ## 2. Conformance
 
-An implementation is **conformant** iff it passes every case in `conformance/` (§9).
+An implementation is **conformant** iff it passes every case in the conformance suite
+(§9), which lives in its own repository — **[`fruwehq/harel-conformance`](https://github.com/fruwehq/harel-conformance)**
+(this repo holds only the normative text: `SPEC.md`, `schema/`, `examples/`).
 Where prose and the suite disagree, the suite wins and a bug MUST be filed against
 this document. Implementations MAY add guard/action languages and adapters; they MUST
 NOT change core dispatch semantics. Machine YAML MUST validate against
@@ -371,6 +373,10 @@ Adapters are selected by the host; the machine YAML never names a transport.
 
 ## 9. Conformance test format (normative)
 
+The cases themselves live in **[`fruwehq/harel-conformance`](https://github.com/fruwehq/harel-conformance)**
+(at `conformance/<case>/`); this section defines their normative format. Implementations
+pin that repository to obtain the suite.
+
 ```
 conformance/<case>/
   machine.yaml          # one or more `---`-separated definitions; first is root
@@ -573,7 +579,9 @@ at 0 in a fresh store. CLI sessions are therefore reproducible and testable. (A
 real-time clock for daemon/operational use is a future option, §11.)
 
 ### 13.6 CLI conformance
-`conformance/cli/<case>/` holds a `cli.yaml` of steps run against a fresh temp store;
+CLI cases live alongside the engine suite in
+**[`fruwehq/harel-conformance`](https://github.com/fruwehq/harel-conformance)** under
+`conformance/cli/<case>/`, each a `cli.yaml` of steps run against a fresh temp store;
 machine files referenced live in the case directory:
 ```yaml
 steps:
@@ -588,8 +596,8 @@ A harness invokes the implementation's `harel` binary; a case passes iff every s
 exit code and stdout match (`json` compared structurally; otherwise `stdout`
 verbatim). This pins cross-language **CLI parity** the way §9 pins engine semantics.
 
-The reference harness is **`conformance/run_cli.py`**, run as
-`python conformance/run_cli.py --cmd "<invoke your harel>"` (e.g. `--cmd "harel"` or
+The reference harness is **`conformance/run_cli.py`** (in `fruwehq/harel-conformance`),
+run as `python conformance/run_cli.py --cmd "<invoke your harel>"` (e.g. `--cmd "harel"` or
 `--cmd "python -m harel"`). It is language-agnostic — it executes every case as a
 **subprocess** against the built/installed binary. Conformance MUST be demonstrated this
 way (true black box); an in-process import of the implementation does NOT satisfy §13.6,
