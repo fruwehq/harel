@@ -1,6 +1,7 @@
 # harel — specification
 
 Status: **draft v2**. Normative unless a section says "informative."
+Spec version: **0.0.1** (see `VERSION`; synchronized across the harel repos).
 Keywords MUST / SHOULD / MAY per RFC 2119.
 
 ## 0. References
