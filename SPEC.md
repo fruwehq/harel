@@ -576,3 +576,40 @@ steps:
 A harness invokes the implementation's `harel` binary; a case passes iff every step's
 exit code and stdout match (`json` compared structurally; otherwise `stdout`
 verbatim). This pins cross-language **CLI parity** the way §9 pins engine semantics.
+
+A step MAY instead exercise **batch mode** (§13.7): it carries a `stdin:` list of argv
+arrays (the NDJSON commands fed to the process) and an `expect.stream:` list compared
+structurally, position by position, against the emitted NDJSON result objects:
+```yaml
+steps:
+  - run: [run, -]
+    stdin:
+      - [new, t1, machine.yaml]
+      - [send, t1, coin, --payload, "amount=100"]
+    expect:
+      exit: 0
+      stream:
+        - { ok: true, exit: 0, result: { config: [locked], status: active } }
+        - { ok: true, exit: 0, result: { config: [unlocked] } }
+```
+
+### 13.7 Batch / streaming mode (normative)
+For scripting and embedding, an implementation MUST support a streaming mode that drives
+many commands in one process against one store and a single virtual clock:
+- `harel run [-]` reads **stdin** as **NDJSON**: each non-empty line is a JSON array of
+  argv tokens for one command — the same commands and options as §13.3, e.g.
+  `["send","t1","coin","--payload","amount=100"]`. A bare `-` argument makes stdin
+  explicit; blank lines are ignored.
+- Commands execute **in order** against the single `--store` and one in-process virtual
+  clock (§13.5); each runs all instances to quiescence (§5.7) before the next line.
+- For each input line the implementation writes **exactly one** NDJSON object to
+  **stdout**, in input order, flushed as it completes:
+  `{ "ok": bool, "exit": int, "result": <value>, "error": { "message": str }? }`.
+  `exit` is that command's §13.2 exit code; `ok` is `exit == 0`; `result` is the
+  command's §13.4 JSON object when it defines one (as if `--json` were passed), the
+  verbatim stdout string for non-JSON output (e.g. `export`), or `null` when there is
+  none. On failure `result` is `null` and `error.message` carries the diagnostic.
+- A failing line **does not** abort the stream; later lines still run. The **process
+  exit code** is `0` iff every line had `exit == 0`, else the first non-zero `exit`.
+- Determinism (§13.5) holds: the clock starts at the store's current time and advances
+  only via `advance` lines, so a batch session is fully reproducible.
