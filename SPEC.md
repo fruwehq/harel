@@ -588,6 +588,13 @@ A harness invokes the implementation's `harel` binary; a case passes iff every s
 exit code and stdout match (`json` compared structurally; otherwise `stdout`
 verbatim). This pins cross-language **CLI parity** the way §9 pins engine semantics.
 
+The reference harness is **`conformance/run_cli.py`**, run as
+`python conformance/run_cli.py --cmd "<invoke your harel>"` (e.g. `--cmd "harel"` or
+`--cmd "python -m harel"`). It is language-agnostic — it executes every case as a
+**subprocess** against the built/installed binary. Conformance MUST be demonstrated this
+way (true black box); an in-process import of the implementation does NOT satisfy §13.6,
+because it cannot catch packaging, entry-point, or I/O regressions an operator would hit.
+
 A step MAY instead exercise **batch mode** (§13.7): it carries a `stdin:` list of argv
 arrays (the NDJSON commands fed to the process) and an `expect.stream:` list compared
 structurally, position by position, against the emitted NDJSON result objects:
