@@ -371,6 +371,13 @@ in-memory default the conformance harness uses**:
 
 Adapters are selected by the host; the machine YAML never names a transport.
 
+An implementation SHOULD provide three **standard store backends** behind the store
+adapter: `file` (portable snapshot files, the default), `mem` (in-memory, ephemeral),
+and `sqlite` (a single-file database). They are selected by a scheme at the host/CLI
+boundary (§13.1) and are behaviorally identical — `mem` and `file` are the
+in-memory/portable defaults, `sqlite` the persistent single-file option; the machine
+semantics never depend on which is used.
+
 ## 9. Conformance test format (normative)
 
 The cases themselves live in **[`fruwehq/harel-conformance`](https://github.com/fruwehq/harel-conformance)**
@@ -531,15 +538,26 @@ JSON/snapshot formats are standardized — the conformance suite already guarant
 behavioral parity.)
 
 ### 13.1 The store
-CLI state persists in a **store** — a directory selected by `--store <dir>` (default
-`$HAREL_STORE`, else `./.harel`). It holds the live instances (their snapshots, §8),
-registered definitions, and the virtual clock. Its on-disk layout is an
-implementation detail; the normative contract is CLI behavior + the JSON I/O (§13.4).
-A state-changing command loads the affected instances, runs **all** instances to
-quiescence (§5.7), and persists atomically.
+CLI state persists in a **store** selected by `--store <spec>` (default
+`$HAREL_STORE`, else `./.harel`). A `<spec>` carries an optional **scheme prefix**
+that picks a backend; a bare value with no scheme is equivalent to `file:` for
+back-compat:
+- `file:<dir>` — JSON snapshot files under a directory. **Default** when no scheme
+  is given: a bare `<dir>` (or `./.harel`).
+- `mem:` — in-memory and **ephemeral**. It is only meaningful **within a single
+  process** (e.g. one `run` batch/streaming session, §13.7, or a test); state does
+  **not** persist across separate CLI invocations.
+- `sqlite:<path>` — a single-file **SQLite** database.
+
+A store holds the live instances (their snapshots, §8), registered definitions, and
+the virtual clock. Its on-disk/in-memory layout is an implementation detail; the
+normative contract is CLI behavior + the JSON I/O (§13.4). All backends MUST be
+behaviorally identical (same CLI results, same snapshot JSON); the machine semantics
+never depend on which is used. A state-changing command loads the affected instances,
+runs **all** instances to quiescence (§5.7), and persists atomically.
 
 ### 13.2 Global options & exit codes
-- `--store <dir>` — the store (above). `--json` — machine-readable stdout (otherwise
+- `--store <spec>` — the store (above). `--json` — machine-readable stdout (otherwise
   human-readable). `--help` / `--version`.
 - Exit codes (normative): `0` success · `2` usage error · `3` validation error ·
   `4` not found (instance/definition) · `5` instance faulted · `1` other runtime
