@@ -576,6 +576,10 @@ runs **all** instances to quiescence (§5.7), and persists atomically.
 | `list [--json]` | every instance in the store (§13.4). |
 | `snapshot <instance>` | print the raw snapshot JSON (§8). |
 | `restore <snapshot.json>` | load a snapshot into the store. |
+| `mode [auto\|manual]` | show or set the processing mode (§14), persisted in the store. |
+| `inject <instance> <event> [--payload k=v]… [--payload-json <json>]` | validate and **enqueue without processing** (§14); print the (unchanged) state (§13.4). |
+| `step <instance> [--steps N]` | process N (default 1) RTC steps (§14); print the resulting state plus a `steps` list. |
+| `inspect <instance>` | full internal state for debugging (§14): queue, deferred, timers, history, dead_letter. |
 
 `--payload k=v` is repeatable; values are **coerced to the event's declared payload
 types** (§4.3) and MUST validate, else exit 3. `--payload-json` supplies the whole
@@ -588,6 +592,10 @@ With `--json`, stdout is exactly one of:
 - `list` → `[ { "id": str, "def": "id@version", "parent": str|null, "status": str, "config": [str…] }, … ]` (ordered by id).
 - `validate` → `{ "valid": bool, "errors": [ { "path": str, "message": str }, … ] }`.
 - `snapshot` → the §8 snapshot object.
+- `mode` → `{ "mode": "auto"|"manual" }`.
+- `inject` → the `state` object for the targeted instance (config unchanged, since it is not processed).
+- `step` → the `state` object for the targeted instance plus `"steps": [ { event, transition, entered[], exited[], published[], spawned[], faulted }, … ]` (one record per RTC step taken, ≤ `--steps`).
+- `inspect` → `{ "instance": str, "status": str, "config": [str…], "esvs": {…}, "queue": [event…], "deferred": [event…], "timers": [timer…], "history": {…}, "dead_letter": [record…]? }`.
 
 Keys and types are part of the standard; implementations MUST match them.
 
@@ -657,3 +665,35 @@ many commands in one process against one store and a single virtual clock:
   exit code** is `0` iff every line had `exit == 0`, else the first non-zero `exit`.
 - Determinism (§13.5) holds: the clock starts at the store's current time and advances
   only via `advance` lines, so a batch session is fully reproducible.
+
+## 14. Introspection & stepping (normative)
+
+A host MAY drive and observe an instance one run-to-completion (RTC) step at a time —
+a debugging surface. §5.2 RTC is normally automatic ("the only driver is event
+arrival"); this section makes manual control and introspection explicit.
+
+**Processing modes.** An instance runs in either **auto** mode (deliver → run to
+quiescence, §5.7 — the current and default behavior) or **manual** mode (events are
+enqueued but **not** processed until an explicit `step`). The mode is host/operator
+state; it MAY be persisted by the store (§8/§13.1) and switched at any quiescent
+point. In manual mode `send`/`inject` enqueue without processing; `advance` (§5.9)
+still arms and fires due timers (enqueuing their events) but defers their processing
+to the next `step`. Determinism (§13.5) is preserved: a manual session is fully
+reproducible because nothing runs until asked.
+
+**Primitives** (the library API is language-idiomatic; the CLI verbs are pinned in §13):
+- `inject(instance, event[, payload])` — validate (§4.3) and **enqueue without
+  processing**, in either mode. Returns whether the event was accepted (a rejected
+  event is not enqueued).
+- `step(instance[, n])` — process exactly **one** RTC step per `n` (default `1`):
+  dequeue one event, run the atomic exit→transition→entry, and enqueue any produced
+  events. Returns one per-step record per `n`, each of the observer shape (§8):
+  `{ event, transition, entered[], exited[], published[], spawned[], faulted }` — the
+  driving `event`, the `transition` that fired (its target, or null for an internal
+  transition / none taken), the states `entered`/`exited`, and the `published` events,
+  `spawned` instances, and `faulted` flag for that step.
+- `run_to_quiescence()` — process until every queue drains (auto semantics, §5.7).
+- `inspect(instance)` — the full internal state, beyond `state` (§13.4):
+  `{ status, config[], esvs{}, queue[], deferred[], timers[], history{}, dead_letter? }`.
+  `queue`/`deferred` are the pending events; `timers` the armed `after` timers;
+  `history` the recorded shallow/deep records.
