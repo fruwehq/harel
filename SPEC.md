@@ -52,6 +52,16 @@ NOT change core dispatch semantics. Machine YAML MUST validate against
 `^[A-Za-z_][A-Za-z0-9_]*$`. The names `top`, `id`, `parent`, `event`, and the events
 `initial`, `entry`, `exit`, `env`, `error`, `done` are **reserved** (§3, §5).
 
+**Library API.** An implementation MUST expose a programmatic API usable as a
+**library** — a host program can drive the engine **without** invoking the CLI (§13) or
+touching the file-backed store. The surface is **language-idiomatic** (not standardized
+across languages), but MUST at minimum let a host: load and validate a definition;
+register definitions and create a root instance with a given `id` and `external` esvs;
+deliver a typed event and run to quiescence (§5.7); advance the virtual clock (§5.9);
+read an instance's status, active configuration, and esvs; and snapshot/restore an
+instance (§8). The CLI is a thin wrapper over this API; cross-language behavioral parity
+is pinned by the conformance suite (§9), not by the API's shape.
+
 ## 3. Concepts
 
 - **Machine definition** — a YAML document describing one *kind* of statechart, with a
@@ -509,8 +519,9 @@ stateDiagram-v2
 
 Every implementation MUST provide a `harel` CLI with the commands, options, exit
 codes, and JSON output below, so operators and tests interact with any language's
-engine **identically**. (The *library* API stays language-idiomatic; only the CLI and
-the JSON/snapshot formats are standardized — the conformance suite already guarantees
+engine **identically**. (This CLI is a thin wrapper over the required programmatic
+*library* API of §2; that API stays language-idiomatic, and only the CLI and the
+JSON/snapshot formats are standardized — the conformance suite already guarantees
 behavioral parity.)
 
 ### 13.1 The store
