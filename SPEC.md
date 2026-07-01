@@ -217,6 +217,12 @@ re-init, and write rules: §5.1.
   Referencing a name not in scope is a load-time error.
 - **Writes.** `assign` writes the **nearest enclosing** declaration. `external` esvs are
   read-only to `assign` (adopt changes via `refresh`, §5.4). Type-checked.
+- **Canonical values.** A value produced by a guard/action language (e.g. a CEL
+  expression result) MUST be **coerced to the variable's declared `type` and stored as a
+  canonical native/JSON value**. An implementation MUST NOT surface an engine- or
+  guard-language-internal wrapper type across any boundary — library return, snapshot
+  (§8), CLI `--json` (§13.4), or observer (§8) — so every implementation exposes the
+  same value representation.
 
 ### 5.2 Run-to-completion (RTC)
 Each instance processes **one event completely** — all transitions, exit/entry/initial
