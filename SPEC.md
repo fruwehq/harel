@@ -79,10 +79,11 @@ is pinned by the conformance suite (§9), not by the API's shape.
 - **Region** — an independent area of a composite/orthogonal state with its own active
   substate. Orthogonal regions run within one RTC step of the *same* instance
   (synchronous), unlike spawned instances (asynchronous).
-- **Pseudostates** — the **initial transition** of a composite/region, `final`, and
-  `history` (shallow/deep). Conditional branching is expressed by **guarded transition
-  lists** (§4.5, first passing guard wins); dedicated `choice`/`junction` pseudostates
-  are a possible future addition.
+- **Pseudostates** — the **initial transition** of a composite/region, `final`,
+  `history` (shallow/deep), and the **choice** pseudostate (§5.5.1). *Static* conditional
+  branching is expressed by **guarded transition lists** (§4.5, first passing guard wins,
+  the UML *junction*); *dynamic* branching — compute a value, then branch on it within one
+  step — uses a **choice** pseudostate.
 - **Event** — an occurrence of a declared **event type** carrying a typed payload.
   Some event types are **reserved lifecycle events**: `initial`, `entry`, `exit`
   (state lifecycle, §5.3/§5.5), `env` (external change, §5.4), `error` (fault, §5.10),
@@ -193,9 +194,13 @@ re-init, and write rules: §5.1.
 - `after`: list of `{ duration, transition_to?, action?, guard? }` timers (§5.9).
 - `defer`: event names deferred while this state is active (§5.8).
 - `history`: `none` (default) | `shallow` | `deep`.
+- `choice`: an ordered **branch list** (§5.5.1). Declaring it makes the node a **choice
+  pseudostate**; it is then mutually exclusive with the state fields above (no `esvs`,
+  `entry`, `exit`, `states`, `on_events`, …).
 
 ### 4.6 Transition
-- `transition_to`: target state id, dotted for nesting; omit ⇒ internal.
+- `transition_to`: target state id, dotted for nesting; omit ⇒ internal. MAY name a
+  **choice pseudostate** (§5.5.1), which resolves to a real state within the step.
 - `guard`: CEL boolean (optional). `lang:` MAY override the language.
 - `action`: ordered action list (optional).
 - `internal` / `local`: bool (§5.5).
@@ -246,6 +251,32 @@ For an external transition `src --> tgt` with actions `a`:
    run `entry`; take `initial` transitions as needed (§5.3).
 `internal`: actions only; no exit/entry. `local`: LCA is the containing composite
 itself (no exit/re-entry of it). Ordering pinned by the suite.
+
+### 5.5.1 Choice pseudostates (dynamic branching)
+A node with a `choice` field is a **choice pseudostate**: a transient branch point that is
+resolved *within* a transition and is **never part of the active configuration** — it has
+no `esvs`, `entry`, `exit`, or `history`. `choice` is an ordered list of **branches**
+`{ guard?, transition_to, action? }`. Exactly **one** branch MUST be the **default** (no
+`guard`) and MUST be last; it is the `else`.
+
+When a transition — or an `initial`, an `after`, or another branch — has `transition_to` a
+choice `C`, the transition is a **compound transition** resolved before any exit/entry:
+1. The triggering transition's `action` runs (in the **source** scope).
+2. At `C`, branches are tried **in order**; the first whose `guard` passes — or the default
+   — is selected, and its `action` runs. If the selected `transition_to` is another choice,
+   repeat; otherwise it is the **final target** `tgt`.
+3. The transition then executes as an external transition `src --> tgt` (§5.5): exit from
+   the source leaf up to `LCA(src, tgt)`, then enter down to `tgt`. The choice(s) traversed
+   contribute **no** exit or entry.
+
+Branch guards and actions read/write esvs in the **source** scope (so a branch sees values
+just assigned by the triggering transition — this is what makes it *dynamic*, unlike a
+guarded transition list whose guards are evaluated before its action). The entire
+resolution is one atomic RTC step: a fault anywhere rolls the whole step back (§5.10).
+
+**Static validation** (load time): every choice has exactly one default branch; every
+`transition_to` resolves; and the graph of choices reachable through `transition_to` is
+**acyclic** (no choice can reach itself), so resolution always terminates at a real state.
 
 ### 5.6 Hierarchy & orthogonal regions
 On dispatch of event `e`, search from the most deeply nested active state up the parent
@@ -445,7 +476,8 @@ and check expectations. Specifics:
   step makes version `n` available and migrates eligible quiescent instances (§10).
 
 The suite MUST cover: leaf transitions; CEL guards (incl. guarded transition lists,
-first-match-wins); internal/local/external; LCA ordering; `initial` transitions with
+first-match-wins, and **choice** pseudostates §5.5.1); internal/local/external; LCA
+ordering; `initial` transitions with
 actions; composite & orthogonal (region order + `done`); shallow/deep history;
 typed-payload accept/reject; `defer`; timers (virtual
 clock); `esvs` scope/shadow/re-init; `external` esvs + `env`/`refresh`; publish
