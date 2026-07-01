@@ -159,6 +159,8 @@ top:                       # THE outermost state (PSiCC "top"); holds machine-wi
   declared events MAY be delivered and payloads MUST validate.
 - `languages` (map, optional) — `{guard, action}` ids; defaults `{guard: cel, action:
   harel}`.
+- `meta` (map, optional) — opaque machine-level annotations for host layers. The engine
+  ignores this data (§4.5).
 - `migrations` (list, optional) — forward migrations from older versions (§10).
 - `top` (StateNode, required) — the outermost state (§4.5). All behavior lives under it.
 
@@ -199,6 +201,9 @@ re-init, and write rules: §5.1.
 
 ### 4.5 StateNode
 - `type`: `simple` (default) | `composite` | `orthogonal` | `final`.
+- `meta`: opaque state annotations for host layers (guardrails, UIs, routing, etc.).
+  `meta` MUST be a map if present. It is purely informative and has no effect on
+  dispatch, validation, snapshots, or conformance behavior.
 - `esvs`: variables scoped to this state (§4.4).
 - `entry`, `exit`: ordered action lists run on entry/exit (§6).
 - `initial`: the **initial transition** (`{ transition_to, guard?, action? }`),
