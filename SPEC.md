@@ -65,6 +65,20 @@ read an instance's status, active configuration, and esvs; and snapshot/restore 
 instance (§8). The CLI is a thin wrapper over this API; cross-language behavioral parity
 is pinned by the conformance suite (§9), not by the API's shape.
 
+**Static validation.** Beyond the schema and reserved names, a definition is **rejected
+at load** if either check below fails. Both are **conservative** and **guard-agnostic**
+(guards are treated as possibly-true), so a rejection always indicates a genuine
+structural defect:
+- **Unreachable states.** Every declared state other than `top` MUST be reachable.
+  Starting from `top` and its `initial`, a state becomes reachable when it is the
+  `initial`/region-initial target of a reachable composite/orthogonal state, or a
+  `transition_to` target (from `on_events`, `after`, or a `choice` branch) of a reachable
+  state — together with the ancestors such entry implies and the initial descendants it
+  triggers. A state nothing can reach is an error.
+- **Dead branches.** In a guarded transition list (§4.5) or a `choice` (§5.5.1), a branch
+  with no `guard` is the unconditional default and MUST be **last**; any branch after it
+  can never be selected (first passing guard wins) and is an error.
+
 ## 3. Concepts
 
 - **Machine definition** — a YAML document describing one *kind* of statechart, with a
