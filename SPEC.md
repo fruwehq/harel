@@ -367,8 +367,14 @@ in-memory default the conformance harness uses**:
   `esvs` is the live values of all in-scope variables. Snapshots MUST round-trip and be
   JSON/YAML-representable (portable across language implementations). `status ∈ {active,
   faulted, terminated}`.
-- **Observer** (optional) — a per-step stream `{ instance, transition, entered, exited,
-  published, spawned, faulted }` for UIs/agents and live visualization (§12).
+- **Observer** (optional) — a **passive** per-step callback. An implementation MAY accept
+  an observer; if present it is invoked **once per completed RTC step** with a record
+  `{ instance, event, transition, entered, exited, published, spawned, faulted }` (the same
+  shape as the §14 `step` record). It fires for **both** automatic (run-to-quiescence) and
+  manual (§14 `step`) processing, and MUST be purely observational — it MUST NOT affect
+  dispatch, ordering, or any semantics. It is the spec-native mechanism for transition
+  logging, live visualization (§12), and agent/UI feeds. (Host-language *diagnostic*
+  logging is a separate, implementation-only concern and is out of scope here.)
 
 Adapters are selected by the host; the machine YAML never names a transport.
 
