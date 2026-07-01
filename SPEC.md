@@ -93,6 +93,9 @@ structural defect:
 - **Region** — an independent area of a composite/orthogonal state with its own active
   substate. Orthogonal regions run within one RTC step of the *same* instance
   (synchronous), unlike spawned instances (asynchronous).
+- **Submachine state** — a state that inlines another definition synchronously (§5.6.1),
+  the run-to-completion counterpart of a spawned active object; it has an isolated esv
+  scope and completes to the parent via `done`.
 - **Pseudostates** — the **initial transition** of a composite/region, `final`,
   `history` (shallow/deep), and the **choice** pseudostate (§5.5.1). *Static* conditional
   branching is expressed by **guarded transition lists** (§4.5, first passing guard wins,
@@ -211,6 +214,11 @@ re-init, and write rules: §5.1.
 - `choice`: an ordered **branch list** (§5.5.1). Declaring it makes the node a **choice
   pseudostate**; it is then mutually exclusive with the state fields above (no `esvs`,
   `entry`, `exit`, `states`, `on_events`, …).
+- `submachine`: the **id of another definition** to inline **synchronously** (§5.6.1).
+  Declaring it makes the node a **submachine state**, mutually exclusive with `states`,
+  `regions`, and `choice`. Optional `with: { <externalEsv>: <CEL> }` seeds the referenced
+  machine's `external` esvs from the parent scope on entry. The referencing state MAY
+  still declare `entry`/`exit`/`on_events`/`after` (its own, layered above the submachine).
 
 ### 4.6 Transition
 - `transition_to`: target state id, dotted for nesting; omit ⇒ internal. MAY name a
@@ -306,6 +314,32 @@ config and unhandled, it is deferred (§5.8); otherwise unhandled events are dis
 (hosts MAY log). An `orthogonal` state offers `e` to **every** region in **declared
 order** within one RTC step; the configuration is the union. When **all** regions reach
 `final`, the engine generates a `done` event for the orthogonal state's parent.
+
+### 5.6.1 Submachine states
+A state with a `submachine: <def_id>` field **inlines another definition** as a nested
+subtree, run **synchronously within the same instance and RTC step** — the
+run-to-completion sibling of `spawn` (§5.7, which creates a separate async instance).
+
+- **Entry.** Entering a submachine state instantiates the referenced definition's `top`
+  as the state's child and performs its initial descent (§5.3): its esvs initialize, its
+  `entry` actions run, and its `initial` transition is taken. The submachine has an
+  **isolated esv scope** — the parent's esvs are **not** visible inside it; only the
+  `external` esvs named in `with:` are seeded (each from a CEL expression over the parent
+  scope), exactly as `spawn`'s payload seeds a child (§5.7).
+- **Dispatch.** Events bubble by ordinary hierarchy (§5.6): the submachine's active
+  states are offered the event first, then the referencing state's own `on_events`, then
+  its ancestors — so a parent MAY handle (and thereby interrupt) events the submachine
+  does not.
+- **Completion.** When the submachine's `top` reaches `final`, the engine generates a
+  **`done`** event for the referencing state (as orthogonal completion does); the parent
+  typically transitions out of the submachine state on `done`. Results flow out via
+  `publish` or the `done` payload — never through shared esvs.
+- **Exit.** Exiting the referencing state exits the whole submachine subtree (its `exit`
+  actions run, its esvs are destroyed), like any composite. Snapshots (§8), history
+  (§5.3), and faults (§5.10) apply to the inlined subtree as to any other states.
+
+**Static validation** (load time): the referenced definition MUST exist, and submachine
+references MUST be **acyclic** (no definition inlines itself, directly or transitively).
 
 ### 5.7 Active objects, queues, spawning, the bus
 - Each instance has a **FIFO queue**; `dispatch` = dequeue one event, run one RTC step.
@@ -498,7 +532,7 @@ and check expectations. Specifics:
 The suite MUST cover: leaf transitions; CEL guards (incl. guarded transition lists,
 first-match-wins, and **choice** pseudostates §5.5.1); internal/local/external; LCA
 ordering; `initial` transitions with
-actions; composite & orthogonal (region order + `done`); shallow/deep history;
+actions; composite & orthogonal (region order + `done`); submachine states (§5.6.1); shallow/deep history;
 typed-payload accept/reject; `defer`; timers (virtual
 clock); `esvs` scope/shadow/re-init; `external` esvs + `env`/`refresh`; publish
 (directed, subscription, scope) + FIFO; spawn/stop + child cleanup; faults (`error`
